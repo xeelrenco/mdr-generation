@@ -1,0 +1,24 @@
+# Configurazione MDR Generator v1
+
+# MotherDuck (Steps 2-4)
+MOTHERDUCK_TOKEN=
+MOTHERDUCK_DB=my_db
+
+# Scope of Work PDF (default: tutti i .pdf in input/SoW/)
+SOW_DIR=input/SoW
+
+# Step 1 — PDF inviato direttamente all'LLM
+SCOPE_LLM_PROVIDER=openai
+SCOPE_MAX_PDF_MB=32
+
+# OpenAI (modello con supporto PDF, es. gpt-4o)
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o
+
+# Vertex Gemini (alternativa)
+VERTEX_CREDENTIALS_PATH=
+VERTEX_PROJECT_ID=
+VERTEX_LOCATION=europe-west1
+GEMINI_MODEL=gemini-2.0-flash
+
+PROJECT_CODE=7350

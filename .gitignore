@@ -1,0 +1,8 @@
+config.txt
+__pycache__/
+*.pyc
+.venv/
+output/*
+!output/.gitkeep
+mdr_generator/__pycache__/
+input/

@@ -1,0 +1,69 @@
+"""Step 3: Generate RACI candidate set from v_DocumentsEnriched."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import List, Set
+
+import duckdb
+import pandas as pd
+
+from .models import NormalizedSignal, RaciCandidate
+
+
+def fetch_raci_candidates(
+    conn: duckdb.DuckDBPyConnection,
+    normalized: List[NormalizedSignal],
+) -> List[RaciCandidate]:
+    if not normalized:
+        return []
+
+    all_candidates: List[RaciCandidate] = []
+    seen: Set[str] = set()
+
+    for sig in normalized:
+        if sig.use_chapter_filter and sig.chapter_name:
+            rows = conn.execute(
+                """
+                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode
+                FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+                WHERE DisciplineCode = $1 AND ChapterName = $2
+                ORDER BY Title
+                """,
+                [sig.discipline_code, sig.chapter_name],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode
+                FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+                WHERE DisciplineCode = $1
+                ORDER BY ChapterName, Title
+                """,
+                [sig.discipline_code],
+            ).fetchall()
+
+        for r in rows:
+            if not r[0] or r[0] in seen:
+                continue
+            seen.add(r[0])
+            all_candidates.append(
+                RaciCandidate(
+                    title_key=r[0],
+                    title=r[1] or "",
+                    discipline_code=r[2] or "",
+                    chapter_name=r[3] or "",
+                    type_code=r[4] or "",
+                )
+            )
+
+    all_candidates.sort(
+        key=lambda c: (c.discipline_code, c.chapter_name, c.title.lower())
+    )
+    return all_candidates
+
+
+def save_candidates_csv(candidates: List[RaciCandidate], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame([c.to_dict() for c in candidates])
+    df.to_csv(path, index=False)
