@@ -13,26 +13,33 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from mdr_generator.candidates import fetch_raci_candidates, save_candidates_csv
 from mdr_generator.config import PROJECT_DIR, cfg
 from mdr_generator.db import (
     connect_motherduck,
     fetch_documents_enriched_keys,
     load_vocabulary,
 )
-from mdr_generator.excel_output import write_mdr_excel
-from mdr_generator.historical import apply_historical_ranking
 from mdr_generator.models import PipelineSummary
-from mdr_generator.normalize import normalize_signals, save_normalized
-from mdr_generator.qa_report import write_qa_report
-from mdr_generator.scope_extract import extract_scope_signals
-from mdr_generator.selection import select_documents
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import save_json
+
+# Step modules use numeric prefixes (1_, 2_, …); import via importlib because
+# `from mdr_generator.1_foo` is invalid Python syntax.
+_im = importlib.import_module
+fetch_raci_candidates = _im("mdr_generator.3_candidates").fetch_raci_candidates
+save_candidates_csv = _im("mdr_generator.3_candidates").save_candidates_csv
+apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ranking
+normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
+save_normalized = _im("mdr_generator.2_normalize").save_normalized
+write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
+extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
+select_documents = _im("mdr_generator.5_selection").select_documents
+write_mdr_excel = _im("mdr_generator.6_excel_output").write_mdr_excel
 
 
 def _parse_args() -> argparse.Namespace:

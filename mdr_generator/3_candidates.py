@@ -25,7 +25,8 @@ def fetch_raci_candidates(
         if sig.use_chapter_filter and sig.chapter_name:
             rows = conn.execute(
                 """
-                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode
+                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
+                       CategoryCode, DisciplineWbs, CategoryWorkflow
                 FROM my_db.mdr_reconciliation.v_DocumentsEnriched
                 WHERE DisciplineCode = $1 AND ChapterName = $2
                 ORDER BY Title
@@ -35,7 +36,8 @@ def fetch_raci_candidates(
         else:
             rows = conn.execute(
                 """
-                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode
+                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
+                       CategoryCode, DisciplineWbs, CategoryWorkflow
                 FROM my_db.mdr_reconciliation.v_DocumentsEnriched
                 WHERE DisciplineCode = $1
                 ORDER BY ChapterName, Title
@@ -54,6 +56,9 @@ def fetch_raci_candidates(
                     discipline_code=r[2] or "",
                     chapter_name=r[3] or "",
                     type_code=r[4] or "",
+                    category_code=r[5] or "",
+                    discipline_wbs=r[6] or "",
+                    category_workflow=r[7] or "",
                 )
             )
 

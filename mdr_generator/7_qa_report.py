@@ -118,6 +118,9 @@ def write_qa_report(
             "discipline_code",
             "chapter_name",
             "type_code",
+            "category_code",
+            "discipline_wbs",
+            "category_workflow",
             "historical_count",
             "avg_confidence",
             "judge_hits",
@@ -131,6 +134,9 @@ def write_qa_report(
                 c.discipline_code,
                 c.chapter_name,
                 c.type_code,
+                c.category_code,
+                c.discipline_wbs,
+                c.category_workflow,
                 c.historical_count,
                 c.avg_confidence,
                 c.judge_hits,
@@ -150,6 +156,9 @@ def write_qa_report(
             "discipline_code",
             "chapter_name",
             "type_code",
+            "category_code",
+            "discipline_wbs",
+            "category_workflow",
             "historical_count",
             "avg_confidence",
             "bucket",
@@ -162,6 +171,9 @@ def write_qa_report(
                 s.discipline_code,
                 s.chapter_name,
                 s.type_code,
+                s.category_code,
+                s.discipline_wbs,
+                s.category_workflow,
                 s.historical_count,
                 s.avg_confidence,
                 s.bucket,
@@ -176,9 +188,27 @@ def write_qa_report(
     without = [s for s in selected if s.bucket == "without_history"]
     _write_sheet(
         ws,
-        ["title_key", "title", "discipline_code", "chapter_name", "type_code"],
         [
-            [s.title_key, s.title, s.discipline_code, s.chapter_name, s.type_code]
+            "title_key",
+            "title",
+            "discipline_code",
+            "chapter_name",
+            "type_code",
+            "category_code",
+            "discipline_wbs",
+            "category_workflow",
+        ],
+        [
+            [
+                s.title_key,
+                s.title,
+                s.discipline_code,
+                s.chapter_name,
+                s.type_code,
+                s.category_code,
+                s.discipline_wbs,
+                s.category_workflow,
+            ]
             for s in without
         ],
     )

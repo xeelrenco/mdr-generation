@@ -60,6 +60,9 @@ class RaciCandidate:
     discipline_code: str
     chapter_name: str
     type_code: str
+    category_code: str
+    discipline_wbs: str
+    category_workflow: str
     historical_count: int = 0
     avg_confidence: Optional[float] = None
     judge_hits: int = 0
@@ -77,6 +80,9 @@ class SelectedDocument:
     discipline_code: str
     chapter_name: str
     type_code: str
+    category_code: str
+    discipline_wbs: str
+    category_workflow: str
     historical_count: int
     avg_confidence: Optional[float]
     selection_reason: str
