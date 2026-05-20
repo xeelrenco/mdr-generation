@@ -81,5 +81,21 @@ Respond with JSON only:
 """
 
 
+def build_scope_pdf_chunk_prompt(
+    vocab: RaciVocabulary,
+    page_start: int,
+    page_end: int,
+    total_pages: int,
+) -> str:
+    base = build_scope_pdf_prompt(vocab)
+    return (
+        f"{base}\n\n"
+        f"CHUNK CONTEXT: This upload is an excerpt of the full Scope of Work PDF "
+        f"(global pages {page_start}–{page_end} of {total_pages} total pages).\n"
+        f"- In source_pages use GLOBAL 1-based page numbers within {page_start}–{page_end} only.\n"
+        f"- Report every discipline/chapter scope signal visible in this excerpt.\n"
+    )
+
+
 # backward compatibility
 build_scope_text_prompt = build_scope_pdf_prompt

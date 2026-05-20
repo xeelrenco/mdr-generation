@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from mdr_generator.config import PROJECT_DIR, cfg
+from mdr_generator.config import PROJECT_DIR, cfg, cfg_bool
 from mdr_generator.db import (
     connect_motherduck,
     fetch_documents_enriched_keys,
@@ -91,7 +91,12 @@ def main() -> int:
 
     conn = connect_motherduck()
     try:
-        print("Step 1: analisi Scope — PDF inviato all'LLM...")
+        chunk_on = cfg_bool("SCOPE_CHUNK_ENABLED", default=False)
+        print(
+            "Step 1: analisi Scope — PDF inviato all'LLM"
+            + (" (chunking attivo)" if chunk_on else "")
+            + "..."
+        )
         raw_signals = extract_scope_signals(
             scope_pdfs,
             conn,

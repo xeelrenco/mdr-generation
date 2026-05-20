@@ -11,6 +11,11 @@ SOW_DIR=input/SoW
 SCOPE_LLM_PROVIDER=openai
 SCOPE_MAX_PDF_MB=32
 
+# Chunking PDF (più chiamate LLM per copertura; false = un PDF intero come prima)
+SCOPE_CHUNK_ENABLED=false
+SCOPE_CHUNK_PAGES=15
+SCOPE_CHUNK_OVERLAP=0
+
 # OpenAI (modello con supporto PDF, es. gpt-4o)
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o

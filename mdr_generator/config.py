@@ -58,3 +58,8 @@ def cfg_float(key: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def cfg_bool(key: str, default: bool = False) -> bool:
+    raw = cfg(key, "true" if default else "false").lower()
+    return raw in ("1", "true", "yes", "on")
