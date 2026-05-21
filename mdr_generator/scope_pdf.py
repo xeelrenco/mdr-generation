@@ -148,6 +148,12 @@ def _vertex_credentials_path() -> Optional[str]:
     return str(path)
 
 
+def _openai_supports_custom_temperature(model: str) -> bool:
+    """GPT-5 / o-series accettano solo temperature default (1)."""
+    m = model.lower()
+    return not m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
 def _call_openai_pdf(
     prompt: str,
@@ -161,9 +167,9 @@ def _call_openai_pdf(
 
     b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
     client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    create_kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": [
             {
                 "role": "user",
                 "content": [
@@ -178,9 +184,11 @@ def _call_openai_pdf(
                 ],
             }
         ],
-        response_format={"type": "json_object"},
-        temperature=0.1,
-    )
+        "response_format": {"type": "json_object"},
+    }
+    if _openai_supports_custom_temperature(model):
+        create_kwargs["temperature"] = 0.1
+    response = client.chat.completions.create(**create_kwargs)
     return parse_json_response(response.choices[0].message.content or "{}")
 
 
