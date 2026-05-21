@@ -15,6 +15,7 @@ from .models import RawScopeSignal
 from .raci_vocabulary import (
     RaciVocabulary,
     build_scope_pdf_chunk_prompt,
+    build_scope_pdf_chunk_repass_prompt,
     build_scope_pdf_prompt,
 )
 from .utils import parse_json_response, save_json
@@ -76,6 +77,8 @@ def _parse_llm_signals(
     source_pdf: str,
     seen: Optional[Set[tuple[str, str, Optional[str]]]] = None,
     extraction_method: str = "llm_pdf",
+    chunk_page_start: Optional[int] = None,
+    chunk_page_end: Optional[int] = None,
 ) -> List[RawScopeSignal]:
     if seen is None:
         seen = set()
@@ -114,9 +117,24 @@ def _parse_llm_signals(
                 notes=(item.get("notes") or "")[:200],
                 source_pdf=source_pdf,
                 extraction_method=extraction_method,
+                chunk_page_start=chunk_page_start,
+                chunk_page_end=chunk_page_end,
             )
         )
     return out
+
+
+def _chunk_extracted_text_length(
+    pdf_bytes: bytes,
+    page_start: int,
+    page_end: int,
+) -> int:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    parts: List[str] = []
+    for page_idx in range(page_start - 1, min(page_end, len(reader.pages))):
+        text = reader.pages[page_idx].extract_text() or ""
+        parts.append(text)
+    return len("".join(parts).strip())
 
 
 def _vertex_credentials_path() -> Optional[str]:
@@ -238,6 +256,8 @@ def _extract_scope_chunked(
     total_pages = _pdf_page_count(pdf_bytes)
     chunk_pages = max(1, cfg_int("SCOPE_CHUNK_PAGES", 15))
     overlap = max(0, cfg_int("SCOPE_CHUNK_OVERLAP", 0))
+    repass_enabled = cfg_bool("SCOPE_CHUNK_REPASS_ENABLED", default=True)
+    repass_min_chars = max(0, cfg_int("SCOPE_CHUNK_REPASS_MIN_CHARS", 200))
     ranges = _chunk_page_ranges(total_pages, chunk_pages, overlap)
 
     seen: Set[tuple[str, str, Optional[str]]] = set()
@@ -247,6 +267,7 @@ def _extract_scope_chunked(
     print(
         f"  Chunking: {len(ranges)} chunk(s), "
         f"{chunk_pages} pag/chunk, overlap={overlap}, {total_pages} pag totali"
+        + (", re-pass attivo" if repass_enabled else "")
     )
 
     for idx, (page_start, page_end) in enumerate(ranges):
@@ -263,15 +284,71 @@ def _extract_scope_chunked(
             source_pdf=pdf_path.name,
             seen=seen,
             extraction_method="llm_pdf_chunk",
+            chunk_page_start=page_start,
+            chunk_page_end=page_end,
         )
         all_signals.extend(chunk_signals)
-        disciplines = sorted({s.discipline_code for s in chunk_signals})
+
+        repass_signals: List[RawScopeSignal] = []
+        repass_attempted = False
+        repass_skipped_reason = ""
+        if repass_enabled and not chunk_signals:
+            text_len = _chunk_extracted_text_length(pdf_bytes, page_start, page_end)
+            if (
+                repass_min_chars > 0
+                and text_len > 0
+                and text_len < repass_min_chars
+            ):
+                repass_skipped_reason = (
+                    f"testo estratto insufficiente ({text_len} caratteri, "
+                    f"soglia {repass_min_chars})"
+                )
+                print(
+                    f"  Re-pass saltato chunk {idx + 1}/{len(ranges)}: "
+                    f"pagine {page_start}-{page_end} ({repass_skipped_reason})"
+                )
+            else:
+                repass_attempted = True
+                repass_prompt = build_scope_pdf_chunk_repass_prompt(
+                    vocab, page_start, page_end, total_pages
+                )
+                repass_upload = f"{pdf_path.stem}_p{page_start}-{page_end}_repass.pdf"
+                print(
+                    f"  LLM re-pass chunk {idx + 1}/{len(ranges)}: "
+                    f"pagine {page_start}-{page_end} (0 segnali al 1° pass)"
+                )
+                repass_data = _invoke_llm_pdf(
+                    repass_prompt,
+                    pdf_path,
+                    chunk_bytes,
+                    provider,
+                    upload_name=repass_upload,
+                )
+                repass_signals = _parse_llm_signals(
+                    repass_data,
+                    source_pdf=pdf_path.name,
+                    seen=seen,
+                    extraction_method="llm_pdf_chunk_repass",
+                    chunk_page_start=page_start,
+                    chunk_page_end=page_end,
+                )
+                all_signals.extend(repass_signals)
+
+        combined = chunk_signals + repass_signals
+        disciplines = sorted({s.discipline_code for s in combined})
         runs.append(
             {
                 "chunk_index": idx,
                 "page_start": page_start,
                 "page_end": page_end,
-                "signal_count": len(chunk_signals),
+                "signal_count": len(combined),
+                "first_pass_signal_count": len(chunk_signals),
+                "repass_attempted": repass_attempted,
+                "repass_signal_count": len(repass_signals),
+                "repass_skipped_reason": repass_skipped_reason or None,
+                "chunk_text_chars": _chunk_extracted_text_length(
+                    pdf_bytes, page_start, page_end
+                ),
                 "disciplines": disciplines,
             }
         )
@@ -280,6 +357,8 @@ def _extract_scope_chunked(
         "enabled": True,
         "pages_per_chunk": chunk_pages,
         "overlap": overlap,
+        "repass_enabled": repass_enabled,
+        "repass_min_chars": repass_min_chars,
         "total_pages": total_pages,
         "chunk_count": len(ranges),
         "runs": runs,
@@ -340,3 +419,27 @@ def extract_all_scope_pdfs(
         audit_path.unlink(missing_ok=True)
 
     return all_signals
+
+
+def read_scope_pdf_bytes(pdf_path: Path) -> bytes:
+    max_mb = cfg_int("SCOPE_MAX_PDF_MB", 32)
+    return _read_pdf_bytes(pdf_path, max_mb=max_mb)
+
+
+def pdf_page_count(pdf_bytes: bytes) -> int:
+    return _pdf_page_count(pdf_bytes)
+
+
+def extract_scope_pdf_pages(pdf_bytes: bytes, page_start: int, page_end: int) -> bytes:
+    return _extract_pdf_page_range(pdf_bytes, page_start, page_end)
+
+
+def call_scope_llm_pdf(
+    prompt: str,
+    pdf_path: Path,
+    pdf_bytes: bytes,
+    provider: Optional[str] = None,
+    upload_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    provider = (provider or cfg("SCOPE_LLM_PROVIDER", "openai")).lower()
+    return _invoke_llm_pdf(prompt, pdf_path, pdf_bytes, provider, upload_name=upload_name)

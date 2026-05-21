@@ -15,6 +15,10 @@ SCOPE_MAX_PDF_MB=32
 SCOPE_CHUNK_ENABLED=false
 SCOPE_CHUNK_PAGES=15
 SCOPE_CHUNK_OVERLAP=0
+# Secondo pass LLM sui chunk che al 1° pass restituiscono 0 segnali (solo con chunking attivo)
+SCOPE_CHUNK_REPASS_ENABLED=true
+# Salta re-pass se il testo estraibile nel chunk e >0 ma sotto soglia (0 = PDF scansionato → re-pass ok)
+SCOPE_CHUNK_REPASS_MIN_CHARS=200
 
 # OpenAI (modello con supporto PDF, es. gpt-4o)
 OPENAI_API_KEY=

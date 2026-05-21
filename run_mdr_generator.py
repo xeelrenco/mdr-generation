@@ -36,6 +36,7 @@ save_candidates_csv = _im("mdr_generator.3_candidates").save_candidates_csv
 apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ranking
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
+recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
 write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
 select_documents = _im("mdr_generator.5_selection").select_documents
@@ -115,8 +116,30 @@ def main() -> int:
             vocab.chapter_names,
             vocab.canonical_pairs,
         )
-        save_normalized(normalized, uncertain, norm_json)
         print(f"  -> {len(normalized)} segnali validi, {len(uncertain)} incerti")
+
+        print("Step 2b: recovery coppie scartate via LLM...")
+        existing_pairs = {
+            (n.discipline_code, n.chapter_name or "") for n in normalized
+        }
+        recovered, uncertain, recovery_audit = recover_rejected_pairs(
+            scope_pdfs,
+            uncertain,
+            vocab,
+            existing_pairs,
+            provider=args.scope_llm_provider,
+        )
+        if recovered:
+            normalized.extend(recovered)
+        save_json(output_dir / "scope_pair_recovery_audit.json", recovery_audit)
+        n_ok = sum(1 for a in recovery_audit if a.get("outcome") == "recovered")
+        n_dup = sum(1 for a in recovery_audit if a.get("outcome") == "duplicate")
+        print(
+            f"  -> {n_ok} coppie recuperate, {n_dup} duplicate,"
+            f" {len(uncertain)} ancora esclusi"
+        )
+
+        save_normalized(normalized, uncertain, norm_json)
 
         print("Step 3: candidati RACI da v_DocumentsEnriched...")
         candidates = fetch_raci_candidates(conn, normalized)

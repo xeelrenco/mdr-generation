@@ -19,7 +19,9 @@ class RawScopeSignal:
     discipline_code: str = ""
     chapter_name: Optional[str] = None
     evidence_quote: str = ""
-    extraction_method: str = ""  # llm_text | llm_vision
+    extraction_method: str = ""  # llm_text | llm_vision | llm_pdf_chunk | llm_pdf_chunk_repass
+    chunk_page_start: Optional[int] = None
+    chunk_page_end: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -48,6 +50,13 @@ class UncertainMapping:
     reason: str
     scope_section: str = ""
     source_pdf: str = ""
+    evidence_quote: str = ""
+    source_pages: List[int] = field(default_factory=list)
+    chunk_page_start: Optional[int] = None
+    chunk_page_end: Optional[int] = None
+    confidence: str = "medium"
+    recovery_attempted: bool = False
+    recovery_outcome: str = ""  # skipped | failed | no_pair | recovered
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -8,6 +8,37 @@ from typing import List, Optional, Set, Tuple
 from .models import NormalizedSignal, RawScopeSignal, UncertainMapping
 from .utils import save_json
 
+RECOVERABLE_REASON_PREFIXES = (
+    "discipline_not_in_raci_vocabulary",
+    "chapter_not_in_raci_vocabulary",
+    "pair_not_in_catalog",
+)
+
+
+def _uncertain_from_raw(
+    raw: RawScopeSignal,
+    raw_discipline: str,
+    raw_chapter: str,
+    reason: str,
+) -> UncertainMapping:
+    return UncertainMapping(
+        raw_discipline=raw_discipline,
+        raw_chapter=raw_chapter,
+        reason=reason,
+        scope_section=raw.scope_section,
+        source_pdf=raw.source_pdf,
+        evidence_quote=raw.evidence_quote or raw.notes,
+        source_pages=list(raw.source_pages),
+        chunk_page_start=raw.chunk_page_start,
+        chunk_page_end=raw.chunk_page_end,
+        confidence=raw.confidence,
+    )
+
+
+def is_recoverable_rejection(reason: str) -> bool:
+    base = reason.split(";")[0].strip()
+    return base in RECOVERABLE_REASON_PREFIXES
+
 
 def _resolve_discipline_code(
     raw: RawScopeSignal,
@@ -45,6 +76,52 @@ def _catalog_disciplines_for_chapter(
     )
 
 
+def _resolve_source_pages(
+    raw: RawScopeSignal,
+    pair_valid: bool,
+) -> Tuple[List[int], Optional[str], List[str]]:
+    """
+    Restituisce (pagine per output, motivo scarto, parti extra per normalization_method).
+
+    Se la coppia catalogo e valida e il segnale viene dal 1° pass chunk, corregge le
+    pagine al chunk invece di scartare (LLM spesso usa numeri di sezione/locali).
+    Il re-pass resta rigoroso per evitare coppie allucinate.
+    """
+    extra: List[str] = []
+    if raw.chunk_page_start is None or raw.chunk_page_end is None:
+        return list(raw.source_pages), None, extra
+
+    start, end = raw.chunk_page_start, raw.chunk_page_end
+    pages = list(raw.source_pages)
+    strict = raw.extraction_method == "llm_pdf_chunk_repass"
+
+    if pages and any(start <= p <= end for p in pages):
+        return pages, None, extra
+
+    if not pair_valid:
+        if not pages:
+            return pages, f"source_pages_missing; chunk pagine {start}-{end}", extra
+        listed = ",".join(str(p) for p in pages)
+        return (
+            pages,
+            f"source_pages_outside_chunk; pagine LLM={listed}, chunk={start}-{end}",
+            extra,
+        )
+
+    if strict:
+        if not pages:
+            return pages, f"source_pages_missing; chunk pagine {start}-{end}", extra
+        listed = ",".join(str(p) for p in pages)
+        return (
+            pages,
+            f"source_pages_outside_chunk; pagine LLM={listed}, chunk={start}-{end}",
+            extra,
+        )
+
+    extra.append("pages_corrected_to_chunk")
+    return [start], None, extra
+
+
 def normalize_signals(
     raw_signals: List[RawScopeSignal],
     discipline_codes: Set[str],
@@ -66,12 +143,11 @@ def normalize_signals(
         disc = _resolve_discipline_code(raw, discipline_codes)
         if not disc:
             uncertain.append(
-                UncertainMapping(
-                    raw_discipline=raw.detected_discipline or raw.discipline_code,
-                    raw_chapter=raw.detected_chapter or (raw.chapter_name or ""),
-                    reason="discipline_not_in_raci_vocabulary",
-                    scope_section=raw.scope_section,
-                    source_pdf=raw.source_pdf,
+                _uncertain_from_raw(
+                    raw,
+                    raw.detected_discipline or raw.discipline_code,
+                    raw.detected_chapter or (raw.chapter_name or ""),
+                    "discipline_not_in_raci_vocabulary",
                 )
             )
             continue
@@ -84,25 +160,15 @@ def normalize_signals(
         raw_chapter_text = raw.chapter_name or raw.detected_chapter or ""
         if not str(raw_chapter_text).strip():
             uncertain.append(
-                UncertainMapping(
-                    raw_discipline=disc,
-                    raw_chapter="",
-                    reason="chapter_required_missing",
-                    scope_section=raw.scope_section,
-                    source_pdf=raw.source_pdf,
-                )
+                _uncertain_from_raw(raw, disc, "", "chapter_required_missing")
             )
             continue
 
         chap = _resolve_chapter_name(raw, chapter_names)
         if not chap:
             uncertain.append(
-                UncertainMapping(
-                    raw_discipline=disc,
-                    raw_chapter=raw_chapter_text,
-                    reason="chapter_not_in_raci_vocabulary",
-                    scope_section=raw.scope_section,
-                    source_pdf=raw.source_pdf,
+                _uncertain_from_raw(
+                    raw, disc, raw_chapter_text, "chapter_not_in_raci_vocabulary"
                 )
             )
             continue
@@ -113,7 +179,8 @@ def normalize_signals(
             method_parts.append("exact_chapter")
 
         pair = (disc, chap)
-        if pair not in canonical_pairs:
+        pair_valid = pair in canonical_pairs
+        if not pair_valid:
             catalog_discs = _catalog_disciplines_for_chapter(chap, canonical_pairs)
             if catalog_discs:
                 reason = (
@@ -122,21 +189,20 @@ def normalize_signals(
                 )
             else:
                 reason = "chapter_no_documents_in_catalog"
-            uncertain.append(
-                UncertainMapping(
-                    raw_discipline=disc,
-                    raw_chapter=raw_chapter_text,
-                    reason=reason,
-                    scope_section=raw.scope_section,
-                    source_pdf=raw.source_pdf,
-                )
-            )
+            uncertain.append(_uncertain_from_raw(raw, disc, raw_chapter_text, reason))
             continue
 
-        key = pair
-        if key in seen:
+        source_pages, page_error, page_extra = _resolve_source_pages(raw, pair_valid=True)
+        if page_error:
+            uncertain.append(
+                _uncertain_from_raw(raw, disc, raw_chapter_text, page_error)
+            )
             continue
-        seen.add(key)
+        method_parts.extend(page_extra)
+
+        if pair in seen:
+            continue
+        seen.add(pair)
 
         normalized.append(
             NormalizedSignal(
@@ -145,7 +211,7 @@ def normalize_signals(
                 chapter_name=chap,
                 confidence=raw.confidence,
                 normalization_method="+".join(method_parts) or "canonical_pair",
-                source_pages=raw.source_pages,
+                source_pages=source_pages,
                 notes=raw.evidence_quote or raw.notes,
                 source_pdf=raw.source_pdf,
                 use_chapter_filter=True,

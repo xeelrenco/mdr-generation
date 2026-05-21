@@ -31,6 +31,8 @@ EXCLUSION_REASON_IT = {
     "chapter_required_missing": "Capitolo mancante nel segnale LLM",
     "pair_not_in_catalog": "Coppia disciplina+capitolo assente dal catalogo documenti",
     "chapter_no_documents_in_catalog": "Capitolo noto ma senza documenti in catalogo",
+    "source_pages_missing": "Pagine PDF mancanti nel segnale LLM",
+    "source_pages_outside_chunk": "Pagine citate fuori dal chunk di estrazione",
 }
 
 CATEGORY_IT = {
@@ -262,18 +264,19 @@ def write_qa_report(
                 u.raw_discipline,
                 u.raw_chapter,
                 _reason_it(u.reason),
+                u.recovery_outcome or "—",
                 u.source_pdf,
             ]
             for u in uncertain
         ]
     else:
-        excl_rows = [["—", "—", "—", "Nessun segnale escluso in questa run", "—"]]
+        excl_rows = [["—", "—", "—", "Nessun segnale escluso in questa run", "—", "—"]]
     _write_table(
         ws,
         1,
-        ["Sezione SoW", "Disciplina LLM", "Capitolo LLM", "Motivo", "PDF"],
+        ["Sezione SoW", "Disciplina LLM", "Capitolo LLM", "Motivo", "Recovery LLM", "PDF"],
         excl_rows,
-        [24, 12, 28, 44, 28],
+        [24, 12, 28, 36, 14, 28],
     )
 
     # --- Foglio 4: MDR_generato ---
