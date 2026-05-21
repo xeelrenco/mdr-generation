@@ -43,6 +43,13 @@ def load_vocabulary(
     return vocab.discipline_codes, vocab.chapter_names
 
 
+def load_canonical_pairs(conn: duckdb.DuckDBPyConnection) -> Set[tuple[str, str]]:
+    """Coppie (DisciplineCode, ChapterName) con almeno un documento in catalogo."""
+    from .raci_vocabulary import load_raci_vocabulary
+
+    return load_raci_vocabulary(conn).canonical_pairs
+
+
 def fetch_documents_enriched_keys(conn: duckdb.DuckDBPyConnection) -> Set[str]:
     rows = conn.execute(
         "SELECT TitleKey FROM my_db.mdr_reconciliation.v_DocumentsEnriched"

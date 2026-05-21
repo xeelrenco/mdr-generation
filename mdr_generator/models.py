@@ -109,3 +109,54 @@ class PipelineSummary:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class RencoComparisonRow:
+    """Singola riga di dettaglio nel confronto con MDR Renco (titolo RACI)."""
+
+    category: str  # overlap | solo_generato | solo_renco_raci
+    title_key: str
+    raci_title: str
+    discipline_code: str
+    chapter_name: str
+    historical_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ScopePairSummary:
+    discipline_code: str
+    chapter_name: str
+    scope_section: str
+    documents_in_mdr: int
+    present_in_renco_raci: bool
+    renco_documents_in_pair: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RencoComparison:
+    source: str  # motherduck
+    source_path: str
+    renco_rows_total: int
+    renco_reconciled_match: int
+    renco_reconciled_no_match: int
+    renco_not_in_reconciliation: int
+    renco_raci_titles_distinct: int
+    generated_titles: int
+    overlap_count: int
+    only_generated_count: int
+    only_renco_raci_count: int
+    detail_rows: List[RencoComparisonRow] = field(default_factory=list)
+    scope_pairs: List[ScopePairSummary] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["detail_rows"] = [r.to_dict() for r in self.detail_rows]
+        d["scope_pairs"] = [p.to_dict() for p in self.scope_pairs]
+        return d

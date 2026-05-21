@@ -13,6 +13,11 @@ class RaciVocabulary:
     discipline_codes: Set[str]
     discipline_names: Dict[str, str]  # Code -> Name
     chapter_names: Set[str]
+    canonical_pairs: Set[Tuple[str, str]]  # (DisciplineCode, ChapterName) with documents
+
+    def pairs_prompt_block(self) -> str:
+        pairs = sorted(self.canonical_pairs, key=lambda p: (p[0], p[1]))
+        return "\n".join(f"- {disc} | {chap}" for disc, chap in pairs)
 
     def discipline_prompt_block(self) -> str:
         lines = []
@@ -35,34 +40,42 @@ def load_raci_vocabulary(conn: duckdb.DuckDBPyConnection) -> RaciVocabulary:
     chapter_rows = conn.execute(
         "SELECT Name FROM my_db.raci_matrix.DocumentChapters ORDER BY Name"
     ).fetchall()
+    pair_rows = conn.execute(
+        """
+        SELECT DISTINCT DisciplineCode, ChapterName
+        FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+        WHERE DisciplineCode IS NOT NULL AND ChapterName IS NOT NULL
+        ORDER BY DisciplineCode, ChapterName
+        """
+    ).fetchall()
 
     codes = {r[0] for r in disc_rows if r[0]}
     names = {r[0]: (r[1] or "") for r in disc_rows if r[0]}
     chapters = {r[0] for r in chapter_rows if r[0]}
+    pairs = {(r[0], r[1]) for r in pair_rows if r[0] and r[1]}
 
     return RaciVocabulary(
         discipline_codes=codes,
         discipline_names=names,
         chapter_names=chapters,
+        canonical_pairs=pairs,
     )
 
 
 def build_scope_pdf_prompt(vocab: RaciVocabulary) -> str:
     return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
-Your task: identify which engineering DISCIPLINES and document CHAPTERS/AREAS are required
+Your task: identify which official RACI pairs (discipline + document chapter) are required
 in scope for documentation/deliverables — NOT individual document titles.
 
-ALLOWED discipline codes (use EXACTLY one of these codes in discipline_code):
-{vocab.discipline_prompt_block()}
+ALLOWED PAIRS — each signal MUST use EXACTLY one row (discipline_code | chapter_name):
+{vocab.pairs_prompt_block()}
 
-ALLOWED chapter names (use EXACT spelling in chapter_name, or null if only discipline is in scope):
-{vocab.chapter_prompt_block()}
-
-For each distinct scope area you find in the PDF, output one object:
+For each distinct scope area you find in the PDF, output one object representing ONE
+row from the allowed pairs list above:
 - scope_section: short label (e.g. section heading from the SoW)
-- discipline_code: one allowed code (required)
-- chapter_name: one allowed chapter name, or null if the SoW implies the whole discipline without a specific chapter
+- discipline_code: one allowed code (required — must match the chapter in RACI)
+- chapter_name: one allowed chapter name (required — never null)
 - confidence: "strong" | "medium" | "weak"
 - source_pages: list of 1-based PDF page numbers where the requirement appears
 - evidence_quote: short verbatim quote from the SoW supporting this (max 250 chars)
@@ -70,9 +83,13 @@ For each distinct scope area you find in the PDF, output one object:
 
 Rules:
 - Read and interpret the full PDF (including scanned pages).
-- Use ONLY codes and chapter names from the lists above.
-- Map SoW wording to the closest official chapter (e.g. "P&ID" -> "PIPING & INSTRUMENT DIAGRAMS", "instrumentation" -> ICT).
-- Do not invent disciplines outside the 7 codes.
+- Use ONLY pairs from the allowed list — copy discipline_code and chapter_name exactly.
+- The same chapter_name may appear in MULTIPLE signals when different rows apply
+  (e.g. both PRC | MATERIAL SELECTION and PVV | MATERIAL SELECTION if scope covers both).
+- Map SoW wording to the closest allowed pair (e.g. P&ID section -> PRC | PIPING & INSTRUMENT DIAGRAMS).
+- Do not output a signal with only a discipline and no chapter_name.
+- Do not expand one scope area to all disciplines that share a chapter name — output only
+  the pairs you can justify from the SoW text.
 - Do not list single MDR document titles.
 - If the PDF does not mention documentation scope, return {{"signals": []}}.
 
@@ -93,7 +110,7 @@ def build_scope_pdf_chunk_prompt(
         f"CHUNK CONTEXT: This upload is an excerpt of the full Scope of Work PDF "
         f"(global pages {page_start}–{page_end} of {total_pages} total pages).\n"
         f"- In source_pages use GLOBAL 1-based page numbers within {page_start}–{page_end} only.\n"
-        f"- Report every discipline/chapter scope signal visible in this excerpt.\n"
+        f"- Report every discipline+chapter scope signal visible in this excerpt (chapter_name required).\n"
     )
 
 

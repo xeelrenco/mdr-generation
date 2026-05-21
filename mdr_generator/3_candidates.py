@@ -22,28 +22,18 @@ def fetch_raci_candidates(
     seen: Set[str] = set()
 
     for sig in normalized:
-        if sig.use_chapter_filter and sig.chapter_name:
-            rows = conn.execute(
-                """
-                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
-                       CategoryCode, DisciplineWbs, CategoryWorkflow
-                FROM my_db.mdr_reconciliation.v_DocumentsEnriched
-                WHERE DisciplineCode = $1 AND ChapterName = $2
-                ORDER BY Title
-                """,
-                [sig.discipline_code, sig.chapter_name],
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
-                       CategoryCode, DisciplineWbs, CategoryWorkflow
-                FROM my_db.mdr_reconciliation.v_DocumentsEnriched
-                WHERE DisciplineCode = $1
-                ORDER BY ChapterName, Title
-                """,
-                [sig.discipline_code],
-            ).fetchall()
+        if not sig.chapter_name:
+            continue
+        rows = conn.execute(
+            """
+            SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
+                   CategoryCode, DisciplineWbs, CategoryWorkflow
+            FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+            WHERE DisciplineCode = $1 AND ChapterName = $2
+            ORDER BY Title
+            """,
+            [sig.discipline_code, sig.chapter_name],
+        ).fetchall()
 
         for r in rows:
             if not r[0] or r[0] in seen:

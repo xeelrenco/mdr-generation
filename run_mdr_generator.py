@@ -22,8 +22,8 @@ from mdr_generator.config import PROJECT_DIR, cfg, cfg_bool
 from mdr_generator.db import (
     connect_motherduck,
     fetch_documents_enriched_keys,
-    load_vocabulary,
 )
+from mdr_generator.raci_vocabulary import load_raci_vocabulary
 from mdr_generator.models import PipelineSummary
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import save_json
@@ -89,6 +89,7 @@ def main() -> int:
     norm_json = output_dir / "scope_normalized_signals.json"
     candidates_csv = output_dir / "raci_candidates.csv"
 
+    renco_cmp = None
     conn = connect_motherduck()
     try:
         chunk_on = cfg_bool("SCOPE_CHUNK_ENABLED", default=False)
@@ -106,10 +107,13 @@ def main() -> int:
         )
         print(f"  -> {len(raw_signals)} segnali (discipline/chapter RACI)")
 
-        print("Step 2: validazione segnali su vocabolario RACI (DB)...")
-        disc_codes, chapter_names = load_vocabulary(conn)
+        print("Step 2: validazione coppie (disciplina+capitolo) su catalogo RACI...")
+        vocab = load_raci_vocabulary(conn)
         normalized, uncertain = normalize_signals(
-            raw_signals, disc_codes, chapter_names
+            raw_signals,
+            vocab.discipline_codes,
+            vocab.chapter_names,
+            vocab.canonical_pairs,
         )
         save_normalized(normalized, uncertain, norm_json)
         print(f"  -> {len(normalized)} segnali validi, {len(uncertain)} incerti")
@@ -129,6 +133,16 @@ def main() -> int:
         print("Step 5: selezione finale...")
         selected, dup_removed = select_documents(ranked, valid_keys)
         print(f"  -> {len(selected)} documenti selezionati")
+
+        print("Step 6: confronto con storico MDR progetto (MotherDuck)...")
+        from mdr_generator.renco_compare import build_renco_comparison
+
+        renco_cmp = build_renco_comparison(conn, project, normalized, selected)
+        print(
+            f"  -> overlap RACI: {renco_cmp.overlap_count}"
+            f" | solo generato: {renco_cmp.only_generated_count}"
+            f" | solo Renco: {renco_cmp.only_renco_raci_count}"
+        )
     finally:
         conn.close()
 
@@ -158,11 +172,11 @@ def main() -> int:
         raw_signals,
         normalized,
         uncertain,
-        ranked,
         selected,
         summary,
+        renco=renco_cmp,
     )
-    print(f"Step 7: report QA -> {report_path}")
+    print(f"Step 7: report qualità -> {report_path}")
 
     if args.dry_run:
         print("Dry-run: Excel MDR non generato.")
@@ -174,7 +188,7 @@ def main() -> int:
         return 1
 
     mdr_path = output_dir / f"{project}_{ts}_MDR.xlsx"
-    print("Step 6: compilazione template MDR...")
+    print("Step 8: compilazione template MDR...")
     write_mdr_excel(template_path, mdr_path, selected, project_code=project)
     print(f"  -> {mdr_path}")
     print("Completato.")

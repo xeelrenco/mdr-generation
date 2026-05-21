@@ -85,7 +85,7 @@ def _parse_llm_signals(
         disc_code = (item.get("discipline_code") or "").strip().upper()
         chap = item.get("chapter_name")
         chapter_name = chap.strip() if isinstance(chap, str) and chap.strip() else None
-        if not disc_code:
+        if not disc_code or not chapter_name:
             continue
 
         section = (item.get("scope_section") or "").strip()

@@ -34,29 +34,36 @@ def _resolve_chapter_name(
     return None
 
 
+def _catalog_disciplines_for_chapter(
+    chapter: str,
+    canonical_pairs: Set[tuple[str, str]],
+) -> List[str]:
+    return sorted(
+        disc
+        for disc, chap in canonical_pairs
+        if chap.upper() == chapter.upper()
+    )
+
+
 def normalize_signals(
     raw_signals: List[RawScopeSignal],
     discipline_codes: Set[str],
     chapter_names: Set[str],
+    canonical_pairs: Set[tuple[str, str]],
 ) -> Tuple[List[NormalizedSignal], List[UncertainMapping]]:
     """
-    Accetta solo discipline_code e chapter_name già allineati al vocabolario RACI
-    restituiti dall'LLM (o match esatto case-insensitive sui campi detected_*).
+    Accetta solo coppie (discipline_code, chapter_name) presenti nel catalogo
+    v_DocumentsEnriched. Lo stesso capitolo può comparire più volte con discipline
+    diverse se l'LLM emette segnali distinti e ogni coppia esiste in catalogo.
     """
     normalized: List[NormalizedSignal] = []
     uncertain: List[UncertainMapping] = []
-    seen: set[tuple[str, Optional[str]]] = set()
+    seen: set[tuple[str, str]] = set()
 
     for raw in raw_signals:
         method_parts: List[str] = []
 
         disc = _resolve_discipline_code(raw, discipline_codes)
-        if disc:
-            if (raw.discipline_code or "").strip().upper() == disc:
-                method_parts.append("llm_discipline")
-            else:
-                method_parts.append("exact_discipline")
-
         if not disc:
             uncertain.append(
                 UncertainMapping(
@@ -69,29 +76,64 @@ def normalize_signals(
             )
             continue
 
-        chap = _resolve_chapter_name(raw, chapter_names)
-        if chap:
-            if raw.chapter_name and str(raw.chapter_name).strip().upper() == chap.upper():
-                method_parts.append("llm_chapter")
-            else:
-                method_parts.append("exact_chapter")
+        if (raw.discipline_code or "").strip().upper() == disc:
+            method_parts.append("llm_discipline")
+        else:
+            method_parts.append("exact_discipline")
 
-        use_chapter = bool(chap) and raw.confidence in ("strong", "medium")
-        if (raw.chapter_name or raw.detected_chapter) and not chap and raw.confidence in (
-            "strong",
-            "medium",
-        ):
+        raw_chapter_text = raw.chapter_name or raw.detected_chapter or ""
+        if not str(raw_chapter_text).strip():
             uncertain.append(
                 UncertainMapping(
                     raw_discipline=disc,
-                    raw_chapter=raw.chapter_name or raw.detected_chapter,
+                    raw_chapter="",
+                    reason="chapter_required_missing",
+                    scope_section=raw.scope_section,
+                    source_pdf=raw.source_pdf,
+                )
+            )
+            continue
+
+        chap = _resolve_chapter_name(raw, chapter_names)
+        if not chap:
+            uncertain.append(
+                UncertainMapping(
+                    raw_discipline=disc,
+                    raw_chapter=raw_chapter_text,
                     reason="chapter_not_in_raci_vocabulary",
                     scope_section=raw.scope_section,
                     source_pdf=raw.source_pdf,
                 )
             )
+            continue
 
-        key = (disc, chap if use_chapter else None)
+        if raw.chapter_name and str(raw.chapter_name).strip().upper() == chap.upper():
+            method_parts.append("llm_chapter")
+        else:
+            method_parts.append("exact_chapter")
+
+        pair = (disc, chap)
+        if pair not in canonical_pairs:
+            catalog_discs = _catalog_disciplines_for_chapter(chap, canonical_pairs)
+            if catalog_discs:
+                reason = (
+                    "pair_not_in_catalog; "
+                    f"discipline ammesse per questo capitolo: {', '.join(catalog_discs)}"
+                )
+            else:
+                reason = "chapter_no_documents_in_catalog"
+            uncertain.append(
+                UncertainMapping(
+                    raw_discipline=disc,
+                    raw_chapter=raw_chapter_text,
+                    reason=reason,
+                    scope_section=raw.scope_section,
+                    source_pdf=raw.source_pdf,
+                )
+            )
+            continue
+
+        key = pair
         if key in seen:
             continue
         seen.add(key)
@@ -100,13 +142,13 @@ def normalize_signals(
             NormalizedSignal(
                 scope_section=raw.scope_section,
                 discipline_code=disc,
-                chapter_name=chap if use_chapter else None,
+                chapter_name=chap,
                 confidence=raw.confidence,
-                normalization_method="+".join(method_parts) or "validated",
+                normalization_method="+".join(method_parts) or "canonical_pair",
                 source_pages=raw.source_pages,
                 notes=raw.evidence_quote or raw.notes,
                 source_pdf=raw.source_pdf,
-                use_chapter_filter=use_chapter,
+                use_chapter_filter=True,
             )
         )
 
