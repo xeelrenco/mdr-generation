@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -18,7 +20,7 @@ from .raci_vocabulary import (
     build_scope_pdf_chunk_repass_prompt,
     build_scope_pdf_prompt,
 )
-from .utils import parse_json_response, save_json
+from .utils import extract_json_payload, parse_json_response, save_json
 
 
 def _read_pdf_bytes(pdf_path: Path, max_mb: int) -> bytes:
@@ -225,6 +227,94 @@ def _call_gemini_pdf(prompt: str, pdf_bytes: bytes, model: str) -> Dict[str, Any
     return parse_json_response(getattr(response, "text", None) or "{}")
 
 
+def _claude_supports_custom_temperature(model: str) -> bool:
+    """Opus 4.7+ non accetta più temperature esplicita."""
+    m = model.lower()
+    return "opus-4-7" not in m and "opus-4.7" not in m
+
+
+def _is_anthropic_rate_limit_error(ex: BaseException) -> bool:
+    msg = str(ex).lower()
+    return "429" in msg or "rate_limit" in msg
+
+
+def _extract_anthropic_text(message: Any) -> str:
+    parts: List[str] = []
+    for block in message.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text or "")
+    return "".join(parts).strip()
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+def _call_claude_pdf(
+    prompt: str,
+    pdf_bytes: bytes,
+    model: str,
+    api_key: str,
+) -> Dict[str, Any]:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+    b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
+    system = (
+        "You analyze engineering Scope of Work PDFs. "
+        "Respond with valid JSON only: no markdown fences, no prose outside the JSON object."
+    )
+    content: List[Dict[str, Any]] = [
+        {"type": "text", "text": prompt},
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": b64,
+            },
+        },
+    ]
+
+    max_output_tokens = max(4096, cfg_int("CLAUDE_MAX_TOKENS", 16384))
+    create_kwargs: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_output_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": content}],
+    }
+    if _claude_supports_custom_temperature(model):
+        create_kwargs["temperature"] = 0.1
+    max_retries = 5
+    base_wait = 60
+    message = None
+    for attempt in range(max_retries):
+        try:
+            message = client.messages.create(**create_kwargs)
+            break
+        except Exception as e:
+            if _is_anthropic_rate_limit_error(e) and attempt < max_retries - 1:
+                time.sleep(base_wait * (2**attempt))
+                continue
+            raise
+
+    if message is None:
+        raise RuntimeError("Claude API: nessuna risposta ricevuta")
+
+    stop_reason = getattr(message, "stop_reason", None)
+    if stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"Claude: risposta troncata (max_tokens={max_output_tokens}). "
+            "Aumenta CLAUDE_MAX_TOKENS in config.txt."
+        )
+
+    raw_text = _extract_anthropic_text(message)
+    try:
+        return parse_json_response(raw_text)
+    except json.JSONDecodeError as e:
+        cleaned = extract_json_payload(raw_text)
+        raise RuntimeError(
+            f"Claude: JSON non valido ({e}). Anteprima: {cleaned[:500]}"
+        ) from e
+
+
 def _invoke_llm_pdf(
     prompt: str,
     pdf_path: Path,
@@ -232,9 +322,20 @@ def _invoke_llm_pdf(
     provider: str,
     upload_name: Optional[str] = None,
 ) -> Dict[str, Any]:
+    provider = (provider or cfg("SCOPE_LLM_PROVIDER", "openai")).lower()
     if provider == "gemini":
         model = cfg("GEMINI_MODEL", "gemini-2.0-flash")
         return _call_gemini_pdf(prompt, pdf_bytes, model)
+    if provider == "claude":
+        api_key = cfg("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY richiesta per SCOPE_LLM_PROVIDER=claude"
+            )
+        model = cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+        return _call_claude_pdf(prompt, pdf_bytes, model, api_key)
+    if provider != "openai":
+        raise RuntimeError(f"SCOPE_LLM_PROVIDER non supportato: {provider}")
     api_key = cfg("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY richiesta per SCOPE_LLM_PROVIDER=openai")

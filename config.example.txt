@@ -7,7 +7,7 @@ MOTHERDUCK_DB=my_db
 # Scope of Work PDF (default: tutti i .pdf in input/SoW/)
 SOW_DIR=input/SoW
 
-# Step 1 — PDF inviato direttamente all'LLM
+# Step 1 — PDF inviato direttamente all'LLM (openai | gemini | claude)
 SCOPE_LLM_PROVIDER=openai
 SCOPE_MAX_PDF_MB=32
 
@@ -23,6 +23,12 @@ SCOPE_CHUNK_REPASS_MIN_CHARS=200
 # OpenAI (modello con supporto PDF, es. gpt-4o)
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o
+
+# Anthropic Claude (alternativa)
+ANTHROPIC_API_KEY=
+CLAUDE_MODEL=claude-sonnet-4-6
+# Max token output Claude (scope JSON; default 16384)
+CLAUDE_MAX_TOKENS=16384
 
 # Vertex Gemini (alternativa)
 VERTEX_CREDENTIALS_PATH=

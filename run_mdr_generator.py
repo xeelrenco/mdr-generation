@@ -63,7 +63,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", default=str(PROJECT_DIR / "output"))
     p.add_argument(
         "--scope-llm-provider",
-        choices=("openai", "gemini"),
+        choices=("openai", "gemini", "claude"),
         default=None,
         help="Provider LLM per analisi PDF Scope (default: config SCOPE_LLM_PROVIDER)",
     )
