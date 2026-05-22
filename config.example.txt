@@ -9,7 +9,7 @@ SOW_DIR=input/SoW
 SCOPE_MAX_PDF_MB=32
 
 # --- Pass 1: estrazione scope (Step 1 + pair recovery Step 2b) ---
-SCOPE_PASS1_LLM_PROVIDER=openai
+# Provider dedotto dal nome modello (gpt→openai, gemini→gemini, claude→claude)
 SCOPE_PASS1_LLM_MODEL=gpt-5.5
 SCOPE_PASS1_CHUNK_ENABLED=true
 SCOPE_PASS1_CHUNK_PAGES=10
@@ -21,14 +21,13 @@ SCOPE_PASS1_CHUNK_REPASS_MIN_CHARS=200
 # --- Pass 2: gap mirato su coppie Renco mancanti (Step 2c) ---
 # Nessun re-pass su pass 2 — una chiamata LLM per chunk
 SCOPE_PASS2_ENABLED=true
-SCOPE_PASS2_LLM_PROVIDER=gemini
 SCOPE_PASS2_LLM_MODEL=gemini-2.5-pro
 SCOPE_PASS2_MAX_PAIRS=60
 SCOPE_PASS2_CHUNK_ENABLED=true
 SCOPE_PASS2_CHUNK_PAGES=10
 SCOPE_PASS2_CHUNK_OVERLAP=2
 
-# --- Credenziali provider (fallback modello se SCOPE_PASS*_LLM_MODEL vuoto) ---
+# --- Credenziali provider (fallback se SCOPE_PASS1/2_LLM_MODEL vuoto) ---
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o
 

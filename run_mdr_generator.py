@@ -64,16 +64,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--project-name", default=cfg("PROJECT_CODE", "project"))
     p.add_argument("--output-dir", default=str(PROJECT_DIR / "output"))
     p.add_argument(
-        "--scope-llm-provider",
-        choices=("openai", "gemini", "claude"),
+        "--scope-llm-model",
         default=None,
-        help="Provider LLM pass 1 (default: config SCOPE_PASS1_LLM_PROVIDER)",
+        help="Override modello LLM pass 1 (default: SCOPE_PASS1_LLM_MODEL)",
     )
     p.add_argument(
-        "--scope-pass2-llm-provider",
-        choices=("openai", "gemini", "claude"),
+        "--scope-pass2-llm-model",
         default=None,
-        help="Provider LLM pass 2 gap mirato (default: config SCOPE_PASS2_LLM_PROVIDER)",
+        help="Override modello LLM pass 2 gap (default: SCOPE_PASS2_LLM_MODEL)",
     )
     p.add_argument(
         "--no-scope-pass2",
@@ -99,11 +97,11 @@ def main() -> int:
         return 1
     print_sow_files(scope_pdfs)
     pass1_provider, pass1_model = resolve_scope_llm_config(
-        "pass1", cli_provider=args.scope_llm_provider
+        "pass1", cli_model=args.scope_llm_model
     )
     pass2_enabled = cfg_bool("SCOPE_PASS2_ENABLED", default=False) and not args.no_scope_pass2
     pass2_provider, pass2_model = resolve_scope_llm_config(
-        "pass2", cli_provider=args.scope_pass2_llm_provider
+        "pass2", cli_model=args.scope_pass2_llm_model
     )
     print(f"LLM pass 1 (scope): {pass1_provider} / {pass1_model}")
     if pass2_enabled:
@@ -130,7 +128,7 @@ def main() -> int:
             conn,
             raw_json,
             output_dir,
-            provider=args.scope_llm_provider,
+            model=args.scope_llm_model,
         )
         print(f"  -> {len(raw_signals)} segnali (discipline/chapter RACI)")
 
@@ -153,7 +151,7 @@ def main() -> int:
             uncertain,
             vocab,
             existing_pairs,
-            provider=args.scope_llm_provider,
+            model=args.scope_llm_model,
         )
         if recovered:
             normalized.extend(recovered)
@@ -173,7 +171,7 @@ def main() -> int:
                 project,
                 vocab,
                 existing_pairs,
-                cli_provider=args.scope_pass2_llm_provider,
+                model=args.scope_pass2_llm_model,
             )
             if gap_recovered:
                 normalized.extend(gap_recovered)

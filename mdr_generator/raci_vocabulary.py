@@ -161,34 +161,42 @@ Respond with JSON only:
 
 
 def build_gap_targeted_pass_prompt(
-    target_pairs: List[Tuple[str, str]],
+    candidate_pairs: List[Tuple[str, str]],
     page_start: int,
     page_end: int,
     total_pages: int,
     pair_examples: Optional[Dict[Tuple[str, str], List[str]]] = None,
 ) -> str:
     lines: List[str] = []
-    for disc, chap in sorted(target_pairs):
+    for disc, chap in sorted(candidate_pairs):
         examples = (pair_examples or {}).get((disc, chap)) or []
         if examples:
             sample = "; ".join(examples[:2])
-            lines.append(f"- {disc} | {chap}  (es. doc. Renco: {sample[:120]})")
+            lines.append(
+                f"- {disc} | {chap}  "
+                f"(typical documents in this chapter: {sample[:140]})"
+            )
         else:
             lines.append(f"- {disc} | {chap}")
     pairs_block = "\n".join(lines)
     return f"""You analyze a Scope of Work (SoW) PDF excerpt for an EPC/engineering project.
 
-CONTEXT: A first scope extraction pass already ran. The pairs below were NOT found yet,
-but they appear in the project's reference MDR (reconciled RACI). Your task is to search
-THIS EXCERPT ONLY for explicit evidence that each missing pair belongs in documentation scope.
+CONTEXT: A first scope extraction pass on this SoW already reported some discipline+chapter
+documentation pairs. The pairs below were NOT identified in that first pass but are still
+plausible candidates for this type of project. Re-read THIS EXCERPT ONLY and confirm any
+pair that is explicitly supported by the SoW text as in-scope for engineering documentation.
 
-TARGET PAIRS — report a signal ONLY for pairs you find clearly supported in this excerpt:
+CANDIDATE PAIRS (not yet reported in pass 1) — output a signal ONLY for pairs you find
+clearly supported in this excerpt:
 {pairs_block}
+
+The parenthetical examples are generic illustrations of what each chapter covers — they
+are NOT a checklist and do NOT imply those documents are required unless the SoW says so.
 
 For each pair you confirm, output one object:
 - scope_section: short label from the SoW section
-- discipline_code: EXACT code from the target pair
-- chapter_name: EXACT chapter from the target pair
+- discipline_code: EXACT code from the candidate pair
+- chapter_name: EXACT chapter from the candidate pair
 - confidence: "strong" | "medium" | "weak"
 - source_pages: list of GLOBAL 1-based PDF page numbers within {page_start}–{page_end}
 - evidence_quote: verbatim quote supporting the pair (max 250 chars)
@@ -196,10 +204,10 @@ For each pair you confirm, output one object:
 
 RULES:
 - This upload covers global pages {page_start}–{page_end} of {total_pages} total pages.
-- Output ONLY pairs from the TARGET list above — do not invent other pairs.
+- Output ONLY pairs from the CANDIDATE list above — do not invent other pairs.
 - Do not report a pair without explicit SoW evidence in this excerpt.
 - Pay special attention to ICT/control systems, electrical, instrumentation, telecom.
-- If none of the target pairs are supported in this excerpt, return {{"signals": []}}.
+- If none of the candidate pairs are supported in this excerpt, return {{"signals": []}}.
 
 Respond with JSON only:
 {{"signals": [...]}}

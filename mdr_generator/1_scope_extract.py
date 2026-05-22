@@ -25,5 +25,5 @@ def extract_scope_signals(
         pdf_paths,
         vocab,
         output_path,
-        provider=kwargs.get("provider") or kwargs.get("scope_llm_provider"),
+        model=kwargs.get("model") or kwargs.get("scope_llm_model"),
     )

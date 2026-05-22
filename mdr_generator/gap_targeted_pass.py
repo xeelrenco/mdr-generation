@@ -1,4 +1,4 @@
-"""Step 2c: second pass LLM mirato sulle coppie scope Renco non ancora estratte."""
+"""Step 2c: second pass LLM su coppie scope candidate non ancora estratte al pass 1."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import duckdb
 from .config import cfg_bool, cfg_int
 from .models import NormalizedSignal
 from .raci_vocabulary import RaciVocabulary, build_gap_targeted_pass_prompt
-from .renco_compare import fetch_renco_scope_pairs, load_project_titles, _fetch_reconciliation_for_titles
+from .renco_compare import fetch_renco_scope_pairs
 from .scope_pdf import (
     call_scope_llm_pdf,
     chunk_page_ranges,
@@ -25,20 +25,27 @@ _norm = __import__("importlib").import_module("mdr_generator.2_normalize")
 _resolve_source_pages = _norm._resolve_source_pages
 
 
-def _fetch_renco_pair_examples(
+def _fetch_catalog_pair_examples(
     conn: duckdb.DuckDBPyConnection,
-    project_code: str,
+    pairs: List[Tuple[str, str]],
+    max_per_pair: int = 2,
 ) -> Dict[Tuple[str, str], List[str]]:
-    titles = load_project_titles(conn, project_code)
-    rows = _fetch_reconciliation_for_titles(conn, titles)
+    """Esempi titolo dal catalogo RACI standard (non legati al progetto corrente)."""
     examples: Dict[Tuple[str, str], List[str]] = {}
-    for _title, decision, raci_title, _title_key, disc, chap in rows:
-        if decision != "MATCH" or not disc or not chap or not raci_title:
-            continue
-        pair = (disc, chap)
-        bucket = examples.setdefault(pair, [])
-        if raci_title not in bucket and len(bucket) < 3:
-            bucket.append(raci_title)
+    for disc, chap in pairs:
+        rows = conn.execute(
+            """
+            SELECT Title
+            FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+            WHERE DisciplineCode = $1 AND ChapterName = $2 AND Title IS NOT NULL
+            ORDER BY Title
+            LIMIT $3
+            """,
+            [disc, chap, max(1, max_per_pair)],
+        ).fetchall()
+        titles = [r[0] for r in rows if r[0]]
+        if titles:
+            examples[(disc, chap)] = titles
     return examples
 
 
@@ -76,13 +83,13 @@ def run_gap_targeted_pass(
     project_code: str,
     vocab: RaciVocabulary,
     existing_pairs: Set[Tuple[str, str]],
-    cli_provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Tuple[List[NormalizedSignal], Dict[str, Any]]:
     if not cfg_bool("SCOPE_PASS2_ENABLED", default=False):
         return [], {"enabled": False}
 
     pass2_provider, pass2_model = resolve_scope_llm_config(
-        "pass2", cli_provider=cli_provider
+        "pass2", cli_model=model
     )
     renco_pairs = fetch_renco_scope_pairs(conn, project_code)
     missing = sorted(renco_pairs - existing_pairs)
@@ -101,12 +108,12 @@ def run_gap_targeted_pass(
     }
 
     if not missing:
-        print("  Step 2c: nessuna coppia Renco mancante — pass 2 saltato")
+        print("  Step 2c: nessuna coppia candidata — pass 2 saltato")
         audit["recovered_count"] = 0
         return [], audit
 
     pending: Set[Tuple[str, str]] = set(missing)
-    pair_examples = _fetch_renco_pair_examples(conn, project_code)
+    pair_examples = _fetch_catalog_pair_examples(conn, missing)
     recovered: List[NormalizedSignal] = []
     chunk_enabled, chunk_pages, overlap = _pass2_chunk_settings()
 
@@ -151,7 +158,6 @@ def run_gap_targeted_pass(
                 prompt,
                 pdf_path,
                 chunk_bytes,
-                provider=pass2_provider,
                 model=pass2_model,
                 pass_id="pass2",
                 upload_name=upload_name,

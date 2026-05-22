@@ -107,7 +107,7 @@ def recover_rejected_pairs(
     uncertain: List[UncertainMapping],
     vocab: RaciVocabulary,
     existing_pairs: Set[Tuple[str, str]],
-    provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Tuple[List[NormalizedSignal], List[UncertainMapping], List[Dict[str, Any]]]:
     pdf_by_name = {p.name: p for p in scope_pdfs}
     pdf_cache: Dict[str, bytes] = {}
@@ -192,7 +192,7 @@ def recover_rejected_pairs(
         )
 
         data = call_scope_llm_pdf(
-            prompt, pdf_path, chunk_bytes, provider, upload_name=upload_name
+            prompt, pdf_path, chunk_bytes, model=model, pass_id="pass1", upload_name=upload_name
         )
         parsed = _parse_recovery_response(data)
         if not parsed:

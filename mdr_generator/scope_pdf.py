@@ -480,23 +480,19 @@ def _extract_scope_chunked(
 def extract_scope_from_pdf(
     pdf_path: Path,
     vocab: RaciVocabulary,
-    provider: Optional[str] = None,
     model: Optional[str] = None,
 ) -> Tuple[List[RawScopeSignal], Optional[Dict[str, Any]]]:
-    if provider is None or model is None:
-        resolved_provider, resolved_model = resolve_scope_llm_config(
-            "pass1", cli_provider=provider
-        )
-        provider = provider or resolved_provider
-        model = model or resolved_model
+    provider, resolved_model = resolve_scope_llm_config("pass1", cli_model=model)
     max_mb = cfg_int("SCOPE_MAX_PDF_MB", 32)
     pdf_bytes = _read_pdf_bytes(pdf_path, max_mb=max_mb)
 
     if cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False):
-        return _extract_scope_chunked(pdf_path, pdf_bytes, vocab, provider, model=model)
+        return _extract_scope_chunked(
+            pdf_path, pdf_bytes, vocab, provider, model=resolved_model
+        )
 
     signals = _extract_scope_single_call(
-        pdf_path, pdf_bytes, vocab, provider, model=model
+        pdf_path, pdf_bytes, vocab, provider, model=resolved_model
     )
     return signals, None
 
@@ -505,15 +501,9 @@ def extract_all_scope_pdfs(
     pdf_paths: List[Path],
     vocab: RaciVocabulary,
     output_path: Path,
-    provider: Optional[str] = None,
     model: Optional[str] = None,
 ) -> List[RawScopeSignal]:
-    if provider is None or model is None:
-        resolved_provider, resolved_model = resolve_scope_llm_config(
-            "pass1", cli_provider=provider
-        )
-        provider = provider or resolved_provider
-        model = model or resolved_model
+    provider, resolved_model = resolve_scope_llm_config("pass1", cli_model=model)
     all_signals: List[RawScopeSignal] = []
     chunking_enabled = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
     all_chunk_runs: List[Dict[str, Any]] = []
@@ -521,7 +511,7 @@ def extract_all_scope_pdfs(
     for pdf_path in pdf_paths:
         print(f"  LLM analisi PDF: {pdf_path.name}")
         signals, chunk_meta = extract_scope_from_pdf(
-            pdf_path, vocab, provider=provider, model=model
+            pdf_path, vocab, model=resolved_model
         )
         all_signals.extend(signals)
         if chunk_meta:
@@ -588,60 +578,60 @@ def parse_llm_scope_signals(
     )
 
 
-def _default_model_for_provider(provider: str) -> str:
-    if provider == "gemini":
-        return cfg("GEMINI_MODEL", "gemini-2.0-flash")
-    if provider == "claude":
-        return cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+def _infer_provider_from_model(model: str) -> str:
+    key = model.lower().strip()
+    if key.startswith("gemini"):
+        return "gemini"
+    if key.startswith("claude"):
+        return "claude"
+    if key.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
+        return "openai"
+    raise RuntimeError(
+        f"Impossibile dedurre il provider dal modello {model!r}. "
+        "Il nome deve iniziare con gpt, gemini o claude "
+        f"(config: SCOPE_PASS*_LLM_MODEL)."
+    )
+
+
+def _default_model_for_pass(pass_id: str) -> str:
+    if pass_id == "pass2":
+        return cfg("GEMINI_MODEL", "gemini-2.5-flash")
     return cfg("OPENAI_MODEL", "gpt-4o")
 
 
 def resolve_scope_llm_config(
     pass_id: str = "pass1",
-    cli_provider: Optional[str] = None,
+    cli_model: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Risolve provider e modello per pass1 (estrazione) o pass2 (gap mirato)."""
+    """Risolve provider e modello per pass1 (estrazione) o pass2 (gap mirato).
+
+    Il provider è dedotto automaticamente dal nome modello (gpt→openai,
+    gemini→gemini, claude→claude). Config: SCOPE_PASS1_LLM_MODEL / SCOPE_PASS2_LLM_MODEL.
+    """
     prefix = f"SCOPE_{pass_id.upper()}_"
-    if cli_provider:
-        provider = cli_provider.lower()
-    else:
-        provider = cfg(f"{prefix}LLM_PROVIDER", "").lower()
-        if not provider:
-            raise RuntimeError(
-                f"{prefix}LLM_PROVIDER richiesto in config.txt (pass {pass_id})"
-            )
-
-    explicit_model = cfg(f"{prefix}LLM_MODEL", "")
-    if explicit_model:
-        return provider, explicit_model
-    return provider, _default_model_for_provider(provider)
+    model = (cli_model or cfg(f"{prefix}LLM_MODEL", "")).strip()
+    if not model:
+        model = _default_model_for_pass(pass_id)
+    return _infer_provider_from_model(model), model
 
 
-def resolve_scope_llm_provider(provider: Optional[str] = None) -> str:
-    resolved, _ = resolve_scope_llm_config("pass1", cli_provider=provider)
-    return resolved
+def resolve_scope_llm_provider(cli_model: Optional[str] = None) -> str:
+    return resolve_scope_llm_config("pass1", cli_model=cli_model)[0]
 
 
-def resolve_scope_llm_model(provider: Optional[str] = None) -> str:
-    _, model = resolve_scope_llm_config("pass1", cli_provider=provider)
-    return model
+def resolve_scope_llm_model(cli_model: Optional[str] = None) -> str:
+    return resolve_scope_llm_config("pass1", cli_model=cli_model)[1]
 
 
 def call_scope_llm_pdf(
     prompt: str,
     pdf_path: Path,
     pdf_bytes: bytes,
-    provider: Optional[str] = None,
     model: Optional[str] = None,
     pass_id: str = "pass1",
     upload_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if provider is None or model is None:
-        resolved_provider, resolved_model = resolve_scope_llm_config(
-            pass_id, cli_provider=provider
-        )
-        provider = provider or resolved_provider
-        model = model or resolved_model
+    provider, resolved_model = resolve_scope_llm_config(pass_id, cli_model=model)
     return _invoke_llm_pdf(
-        prompt, pdf_path, pdf_bytes, provider, model=model, upload_name=upload_name
+        prompt, pdf_path, pdf_bytes, provider, model=resolved_model, upload_name=upload_name
     )
