@@ -105,6 +105,8 @@ class SelectedDocument:
 class PipelineSummary:
     project_name: str
     scope_pdfs: List[str]
+    scope_llm_provider: str
+    scope_llm_model: str
     disciplines_found: List[str]
     chapters_found: List[str]
     raw_signal_count: int
@@ -115,6 +117,11 @@ class PipelineSummary:
     without_history_count: int
     duplicates_removed: int
     uncertain_mapping_count: int
+    scope_pass2_enabled: bool = False
+    scope_pass2_provider: str = ""
+    scope_pass2_model: str = ""
+    scope_pass2_pairs_targeted: int = 0
+    scope_pass2_pairs_recovered: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -66,6 +66,20 @@ def _fetch_reconciliation_for_titles(
     ).fetchall()
 
 
+def fetch_renco_scope_pairs(
+    conn: duckdb.DuckDBPyConnection,
+    project_code: str,
+) -> Set[Tuple[str, str]]:
+    """Coppie disciplina+capitolo presenti nel MDR storico (solo MATCH consolidati)."""
+    titles = load_project_titles(conn, project_code)
+    rows = _fetch_reconciliation_for_titles(conn, titles)
+    pairs: Set[Tuple[str, str]] = set()
+    for _title, decision, _raci, _title_key, disc, chap in rows:
+        if decision == "MATCH" and disc and chap:
+            pairs.add((disc, chap))
+    return pairs
+
+
 def build_renco_comparison(
     conn: duckdb.DuckDBPyConnection,
     project_code: str,

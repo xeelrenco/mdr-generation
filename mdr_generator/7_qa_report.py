@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -82,6 +83,60 @@ def _reason_it(reason: str) -> str:
     return base
 
 
+def _build_gap_analysis_rows(
+    renco: RencoComparison,
+    normalized: List[NormalizedSignal],
+) -> tuple[List[List[Any]], List[List[Any]]]:
+    """Righe dettaglio gap + riepilogo per disciplina."""
+    scope_pairs = {(n.discipline_code, n.chapter_name or "") for n in normalized}
+    pair_renco_docs: dict[tuple[str, str], int] = {}
+    for p in renco.scope_pairs:
+        if p.present_in_renco_raci:
+            pair_renco_docs[(p.discipline_code, p.chapter_name)] = (
+                p.renco_documents_in_pair
+            )
+
+    detail: List[List[Any]] = []
+    gap_pairs: set[tuple[str, str]] = set()
+    for r in renco.detail_rows:
+        if r.category != "solo_renco_raci":
+            continue
+        pair = (r.discipline_code, r.chapter_name or "")
+        gap_pairs.add(pair)
+        in_scope = pair in scope_pairs
+        detail.append(
+            [
+                r.discipline_code,
+                r.chapter_name,
+                r.raci_title,
+                "Sì" if in_scope else "No",
+                pair_renco_docs.get(pair, "—"),
+            ]
+        )
+    detail.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    pairs_in_scope = sum(1 for p in gap_pairs if p in scope_pairs)
+    summary = [
+        ["Titoli RACI nel gap", len(detail), "Solo MDR Renco (MATCH)"],
+        ["Coppie disc+cap distinte nel gap", len(gap_pairs), ""],
+        [
+            "Coppie gap coperte dallo scope di questa run",
+            pairs_in_scope,
+            "Scope estratto dal PDF in questa run",
+        ],
+        [
+            "Coppie gap ancora fuori scope",
+            len(gap_pairs) - pairs_in_scope,
+            "Candidati per second pass mirato sul PDF",
+        ],
+    ]
+    by_disc = Counter(r[0] for r in detail)
+    for disc, count in sorted(by_disc.items()):
+        summary.append([f"  — {disc}", count, "Titoli nel gap per disciplina"])
+
+    return summary, detail
+
+
 def write_qa_report(
     output_path: Path,
     raw_signals: List[RawScopeSignal],
@@ -133,6 +188,11 @@ def write_qa_report(
             "",
             "Diff su titoli RACI: overlap, solo generato, solo Renco. I documenti NO_MATCH restano fuori.",
         ),
+        (
+            "Gap_analisi",
+            "",
+            "Titoli Renco non generati: verifica se la coppia scope è presente in questa run.",
+        ),
     ]
     row = _write_table(
         ws, row, ["Foglio", "Valore", "Descrizione"], notes, [22, 12, 52]
@@ -142,6 +202,40 @@ def write_qa_report(
     pipeline_rows = [
         ["Progetto", summary.project_name, ""],
         ["PDF Scope", "; ".join(summary.scope_pdfs), ""],
+        [
+            "Provider LLM Scope",
+            summary.scope_llm_provider or "—",
+            "Pass 1 — estrazione + pair recovery",
+        ],
+        [
+            "Modello LLM Scope",
+            summary.scope_llm_model or "—",
+            "Pass 1 — risolto da config/CLI",
+        ],
+        [
+            "Pass 2 gap mirato",
+            "Sì" if summary.scope_pass2_enabled else "No",
+            "Second pass su coppie Renco non trovate",
+        ],
+        [
+            "Provider / modello pass 2",
+            (
+                f"{summary.scope_pass2_provider} / {summary.scope_pass2_model}"
+                if summary.scope_pass2_enabled
+                else "—"
+            ),
+            "Config SCOPE_PASS2_*",
+        ],
+        [
+            "Coppie target pass 2",
+            summary.scope_pass2_pairs_targeted if summary.scope_pass2_enabled else "—",
+            "Coppie Renco mancanti dopo pass 1",
+        ],
+        [
+            "Coppie recuperate pass 2",
+            summary.scope_pass2_pairs_recovered if summary.scope_pass2_enabled else "—",
+            "Aggiunte allo scope normalizzato",
+        ],
         ["1. Segnali LLM (raw)", summary.raw_signal_count, "Estratti dal PDF"],
         [
             "2. Coppie scope valide",
@@ -362,6 +456,40 @@ def write_qa_report(
             else:
                 ws.cell(row=row, column=1, value="(nessuna riga)")
                 row += 2
+
+    # --- Foglio 6: Gap_analisi ---
+    ws = wb.create_sheet("Gap_analisi")
+    row = 1
+    if not renco:
+        ws.cell(
+            row=1,
+            column=1,
+            value="Gap non disponibile — confronto Renco assente.",
+        )
+    else:
+        gap_summary, gap_detail = _build_gap_analysis_rows(renco, normalized)
+        row = _write_section_title(ws, row, "Riepilogo gap vs MDR Renco")
+        row = _write_table(
+            ws, row, ["Metrica", "Valore", "Nota"], gap_summary, [36, 10, 44]
+        )
+        row = _write_section_title(ws, row, "Titoli Renco non generati (solo_renco_raci)")
+        if gap_detail:
+            row = _write_table(
+                ws,
+                row,
+                [
+                    "Disciplina",
+                    "Capitolo",
+                    "Titolo RACI",
+                    "In scope run",
+                    "Doc Renco (coppia)",
+                ],
+                gap_detail,
+                [10, 28, 44, 14, 16],
+            )
+        else:
+            ws.cell(row=row, column=1, value="(nessun gap — overlap completo)")
+            row += 2
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)

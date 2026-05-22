@@ -4,33 +4,38 @@
 MOTHERDUCK_TOKEN=
 MOTHERDUCK_DB=my_db
 
-# Scope of Work PDF (default: tutti i .pdf in input/SoW/)
+# --- Scope PDF (comune) ---
 SOW_DIR=input/SoW
-
-# Step 1 — PDF inviato direttamente all'LLM (openai | gemini | claude)
-SCOPE_LLM_PROVIDER=openai
 SCOPE_MAX_PDF_MB=32
 
-# Chunking PDF (più chiamate LLM per copertura; false = un PDF intero come prima)
-SCOPE_CHUNK_ENABLED=false
-SCOPE_CHUNK_PAGES=15
-SCOPE_CHUNK_OVERLAP=0
-# Secondo pass LLM sui chunk che al 1° pass restituiscono 0 segnali (solo con chunking attivo)
-SCOPE_CHUNK_REPASS_ENABLED=true
-# Salta re-pass se il testo estraibile nel chunk e >0 ma sotto soglia (0 = PDF scansionato → re-pass ok)
-SCOPE_CHUNK_REPASS_MIN_CHARS=200
+# --- Pass 1: estrazione scope (Step 1 + pair recovery Step 2b) ---
+SCOPE_PASS1_LLM_PROVIDER=openai
+SCOPE_PASS1_LLM_MODEL=gpt-5.5
+SCOPE_PASS1_CHUNK_ENABLED=true
+SCOPE_PASS1_CHUNK_PAGES=10
+SCOPE_PASS1_CHUNK_OVERLAP=1
+# Re-pass solo pass 1: seconda chiamata LLM sui chunk con 0 segnali al 1° pass
+SCOPE_PASS1_CHUNK_REPASS_ENABLED=true
+SCOPE_PASS1_CHUNK_REPASS_MIN_CHARS=200
 
-# OpenAI (modello con supporto PDF, es. gpt-4o)
+# --- Pass 2: gap mirato su coppie Renco mancanti (Step 2c) ---
+# Nessun re-pass su pass 2 — una chiamata LLM per chunk
+SCOPE_PASS2_ENABLED=true
+SCOPE_PASS2_LLM_PROVIDER=gemini
+SCOPE_PASS2_LLM_MODEL=gemini-2.5-pro
+SCOPE_PASS2_MAX_PAIRS=60
+SCOPE_PASS2_CHUNK_ENABLED=true
+SCOPE_PASS2_CHUNK_PAGES=10
+SCOPE_PASS2_CHUNK_OVERLAP=2
+
+# --- Credenziali provider (fallback modello se SCOPE_PASS*_LLM_MODEL vuoto) ---
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o
 
-# Anthropic Claude (alternativa)
 ANTHROPIC_API_KEY=
 CLAUDE_MODEL=claude-sonnet-4-6
-# Max token output Claude (scope JSON; default 16384)
 CLAUDE_MAX_TOKENS=16384
 
-# Vertex Gemini (alternativa)
 VERTEX_CREDENTIALS_PATH=
 VERTEX_PROJECT_ID=
 VERTEX_LOCATION=europe-west1

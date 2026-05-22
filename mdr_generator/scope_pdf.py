@@ -320,28 +320,27 @@ def _invoke_llm_pdf(
     pdf_path: Path,
     pdf_bytes: bytes,
     provider: str,
+    model: Optional[str] = None,
     upload_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    provider = (provider or cfg("SCOPE_LLM_PROVIDER", "openai")).lower()
+    provider = (provider or "openai").lower()
     if provider == "gemini":
-        model = cfg("GEMINI_MODEL", "gemini-2.0-flash")
-        return _call_gemini_pdf(prompt, pdf_bytes, model)
+        resolved = model or cfg("GEMINI_MODEL", "gemini-2.0-flash")
+        return _call_gemini_pdf(prompt, pdf_bytes, resolved)
     if provider == "claude":
         api_key = cfg("ANTHROPIC_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY richiesta per SCOPE_LLM_PROVIDER=claude"
-            )
-        model = cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
-        return _call_claude_pdf(prompt, pdf_bytes, model, api_key)
+            raise RuntimeError("ANTHROPIC_API_KEY richiesta per provider LLM claude")
+        resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+        return _call_claude_pdf(prompt, pdf_bytes, resolved, api_key)
     if provider != "openai":
-        raise RuntimeError(f"SCOPE_LLM_PROVIDER non supportato: {provider}")
+        raise RuntimeError(f"Provider LLM scope non supportato: {provider}")
     api_key = cfg("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY richiesta per SCOPE_LLM_PROVIDER=openai")
-    model = cfg("OPENAI_MODEL", "gpt-4o")
+        raise RuntimeError("OPENAI_API_KEY richiesta per provider LLM openai")
+    resolved = model or cfg("OPENAI_MODEL", "gpt-4o")
     return _call_openai_pdf(
-        prompt, pdf_path, pdf_bytes, model, api_key, upload_name=upload_name
+        prompt, pdf_path, pdf_bytes, resolved, api_key, upload_name=upload_name
     )
 
 
@@ -350,9 +349,10 @@ def _extract_scope_single_call(
     pdf_bytes: bytes,
     vocab: RaciVocabulary,
     provider: str,
+    model: Optional[str] = None,
 ) -> List[RawScopeSignal]:
     prompt = build_scope_pdf_prompt(vocab)
-    data = _invoke_llm_pdf(prompt, pdf_path, pdf_bytes, provider)
+    data = _invoke_llm_pdf(prompt, pdf_path, pdf_bytes, provider, model=model)
     return _parse_llm_signals(data, source_pdf=pdf_path.name, extraction_method="llm_pdf")
 
 
@@ -361,12 +361,13 @@ def _extract_scope_chunked(
     pdf_bytes: bytes,
     vocab: RaciVocabulary,
     provider: str,
+    model: Optional[str] = None,
 ) -> Tuple[List[RawScopeSignal], Dict[str, Any]]:
     total_pages = _pdf_page_count(pdf_bytes)
-    chunk_pages = max(1, cfg_int("SCOPE_CHUNK_PAGES", 15))
-    overlap = max(0, cfg_int("SCOPE_CHUNK_OVERLAP", 0))
-    repass_enabled = cfg_bool("SCOPE_CHUNK_REPASS_ENABLED", default=True)
-    repass_min_chars = max(0, cfg_int("SCOPE_CHUNK_REPASS_MIN_CHARS", 200))
+    chunk_pages = max(1, cfg_int("SCOPE_PASS1_CHUNK_PAGES", 10))
+    overlap = max(0, cfg_int("SCOPE_PASS1_CHUNK_OVERLAP", 1))
+    repass_enabled = cfg_bool("SCOPE_PASS1_CHUNK_REPASS_ENABLED", default=True)
+    repass_min_chars = max(0, cfg_int("SCOPE_PASS1_CHUNK_REPASS_MIN_CHARS", 200))
     ranges = _chunk_page_ranges(total_pages, chunk_pages, overlap)
 
     seen: Set[tuple[str, str, Optional[str]]] = set()
@@ -386,7 +387,7 @@ def _extract_scope_chunked(
         print(f"  LLM chunk {idx + 1}/{len(ranges)}: pagine {page_start}-{page_end}")
 
         data = _invoke_llm_pdf(
-            prompt, pdf_path, chunk_bytes, provider, upload_name=upload_name
+            prompt, pdf_path, chunk_bytes, provider, model=model, upload_name=upload_name
         )
         chunk_signals = _parse_llm_signals(
             data,
@@ -431,6 +432,7 @@ def _extract_scope_chunked(
                     pdf_path,
                     chunk_bytes,
                     provider,
+                    model=model,
                     upload_name=repass_upload,
                 )
                 repass_signals = _parse_llm_signals(
@@ -479,15 +481,23 @@ def extract_scope_from_pdf(
     pdf_path: Path,
     vocab: RaciVocabulary,
     provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Tuple[List[RawScopeSignal], Optional[Dict[str, Any]]]:
-    provider = (provider or cfg("SCOPE_LLM_PROVIDER", "openai")).lower()
+    if provider is None or model is None:
+        resolved_provider, resolved_model = resolve_scope_llm_config(
+            "pass1", cli_provider=provider
+        )
+        provider = provider or resolved_provider
+        model = model or resolved_model
     max_mb = cfg_int("SCOPE_MAX_PDF_MB", 32)
     pdf_bytes = _read_pdf_bytes(pdf_path, max_mb=max_mb)
 
-    if cfg_bool("SCOPE_CHUNK_ENABLED", default=False):
-        return _extract_scope_chunked(pdf_path, pdf_bytes, vocab, provider)
+    if cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False):
+        return _extract_scope_chunked(pdf_path, pdf_bytes, vocab, provider, model=model)
 
-    signals = _extract_scope_single_call(pdf_path, pdf_bytes, vocab, provider)
+    signals = _extract_scope_single_call(
+        pdf_path, pdf_bytes, vocab, provider, model=model
+    )
     return signals, None
 
 
@@ -496,14 +506,23 @@ def extract_all_scope_pdfs(
     vocab: RaciVocabulary,
     output_path: Path,
     provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> List[RawScopeSignal]:
+    if provider is None or model is None:
+        resolved_provider, resolved_model = resolve_scope_llm_config(
+            "pass1", cli_provider=provider
+        )
+        provider = provider or resolved_provider
+        model = model or resolved_model
     all_signals: List[RawScopeSignal] = []
-    chunking_enabled = cfg_bool("SCOPE_CHUNK_ENABLED", default=False)
+    chunking_enabled = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
     all_chunk_runs: List[Dict[str, Any]] = []
 
     for pdf_path in pdf_paths:
         print(f"  LLM analisi PDF: {pdf_path.name}")
-        signals, chunk_meta = extract_scope_from_pdf(pdf_path, vocab, provider=provider)
+        signals, chunk_meta = extract_scope_from_pdf(
+            pdf_path, vocab, provider=provider, model=model
+        )
         all_signals.extend(signals)
         if chunk_meta:
             chunk_meta["source_pdf"] = pdf_path.name
@@ -543,12 +562,86 @@ def extract_scope_pdf_pages(pdf_bytes: bytes, page_start: int, page_end: int) ->
     return _extract_pdf_page_range(pdf_bytes, page_start, page_end)
 
 
+def chunk_page_ranges(
+    total_pages: int,
+    chunk_pages: int,
+    overlap: int,
+) -> List[Tuple[int, int]]:
+    return _chunk_page_ranges(total_pages, chunk_pages, overlap)
+
+
+def parse_llm_scope_signals(
+    data: Dict[str, Any],
+    source_pdf: str,
+    seen: Optional[Set[tuple[str, str, Optional[str]]]] = None,
+    extraction_method: str = "llm_pdf",
+    chunk_page_start: Optional[int] = None,
+    chunk_page_end: Optional[int] = None,
+) -> List[RawScopeSignal]:
+    return _parse_llm_signals(
+        data,
+        source_pdf=source_pdf,
+        seen=seen,
+        extraction_method=extraction_method,
+        chunk_page_start=chunk_page_start,
+        chunk_page_end=chunk_page_end,
+    )
+
+
+def _default_model_for_provider(provider: str) -> str:
+    if provider == "gemini":
+        return cfg("GEMINI_MODEL", "gemini-2.0-flash")
+    if provider == "claude":
+        return cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+    return cfg("OPENAI_MODEL", "gpt-4o")
+
+
+def resolve_scope_llm_config(
+    pass_id: str = "pass1",
+    cli_provider: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Risolve provider e modello per pass1 (estrazione) o pass2 (gap mirato)."""
+    prefix = f"SCOPE_{pass_id.upper()}_"
+    if cli_provider:
+        provider = cli_provider.lower()
+    else:
+        provider = cfg(f"{prefix}LLM_PROVIDER", "").lower()
+        if not provider:
+            raise RuntimeError(
+                f"{prefix}LLM_PROVIDER richiesto in config.txt (pass {pass_id})"
+            )
+
+    explicit_model = cfg(f"{prefix}LLM_MODEL", "")
+    if explicit_model:
+        return provider, explicit_model
+    return provider, _default_model_for_provider(provider)
+
+
+def resolve_scope_llm_provider(provider: Optional[str] = None) -> str:
+    resolved, _ = resolve_scope_llm_config("pass1", cli_provider=provider)
+    return resolved
+
+
+def resolve_scope_llm_model(provider: Optional[str] = None) -> str:
+    _, model = resolve_scope_llm_config("pass1", cli_provider=provider)
+    return model
+
+
 def call_scope_llm_pdf(
     prompt: str,
     pdf_path: Path,
     pdf_bytes: bytes,
     provider: Optional[str] = None,
+    model: Optional[str] = None,
+    pass_id: str = "pass1",
     upload_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    provider = (provider or cfg("SCOPE_LLM_PROVIDER", "openai")).lower()
-    return _invoke_llm_pdf(prompt, pdf_path, pdf_bytes, provider, upload_name=upload_name)
+    if provider is None or model is None:
+        resolved_provider, resolved_model = resolve_scope_llm_config(
+            pass_id, cli_provider=provider
+        )
+        provider = provider or resolved_provider
+        model = model or resolved_model
+    return _invoke_llm_pdf(
+        prompt, pdf_path, pdf_bytes, provider, model=model, upload_name=upload_name
+    )

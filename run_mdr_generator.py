@@ -25,6 +25,7 @@ from mdr_generator.db import (
 )
 from mdr_generator.raci_vocabulary import load_raci_vocabulary
 from mdr_generator.models import PipelineSummary
+from mdr_generator.scope_pdf import resolve_scope_llm_config
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import save_json
 
@@ -37,6 +38,7 @@ apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ra
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
 recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
+run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_pass
 write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
 select_documents = _im("mdr_generator.5_selection").select_documents
@@ -65,7 +67,18 @@ def _parse_args() -> argparse.Namespace:
         "--scope-llm-provider",
         choices=("openai", "gemini", "claude"),
         default=None,
-        help="Provider LLM per analisi PDF Scope (default: config SCOPE_LLM_PROVIDER)",
+        help="Provider LLM pass 1 (default: config SCOPE_PASS1_LLM_PROVIDER)",
+    )
+    p.add_argument(
+        "--scope-pass2-llm-provider",
+        choices=("openai", "gemini", "claude"),
+        default=None,
+        help="Provider LLM pass 2 gap mirato (default: config SCOPE_PASS2_LLM_PROVIDER)",
+    )
+    p.add_argument(
+        "--no-scope-pass2",
+        action="store_true",
+        help="Disabilita pass 2 gap mirato anche se SCOPE_PASS2_ENABLED=true",
     )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
@@ -85,15 +98,28 @@ def main() -> int:
         print(f"ERRORE: {e}", file=sys.stderr)
         return 1
     print_sow_files(scope_pdfs)
+    pass1_provider, pass1_model = resolve_scope_llm_config(
+        "pass1", cli_provider=args.scope_llm_provider
+    )
+    pass2_enabled = cfg_bool("SCOPE_PASS2_ENABLED", default=False) and not args.no_scope_pass2
+    pass2_provider, pass2_model = resolve_scope_llm_config(
+        "pass2", cli_provider=args.scope_pass2_llm_provider
+    )
+    print(f"LLM pass 1 (scope): {pass1_provider} / {pass1_model}")
+    if pass2_enabled:
+        print(f"LLM pass 2 (gap):   {pass2_provider} / {pass2_model}")
+    else:
+        print("LLM pass 2 (gap):   disabilitato")
 
     raw_json = output_dir / "scope_raw_signals.json"
     norm_json = output_dir / "scope_normalized_signals.json"
     candidates_csv = output_dir / "raci_candidates.csv"
 
     renco_cmp = None
+    gap_pass_audit: dict = {"enabled": False}
     conn = connect_motherduck()
     try:
-        chunk_on = cfg_bool("SCOPE_CHUNK_ENABLED", default=False)
+        chunk_on = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
         print(
             "Step 1: analisi Scope — PDF inviato all'LLM"
             + (" (chunking attivo)" if chunk_on else "")
@@ -139,6 +165,25 @@ def main() -> int:
             f" {len(uncertain)} ancora esclusi"
         )
 
+        if pass2_enabled:
+            print("Step 2c: second pass mirato su coppie Renco mancanti...")
+            gap_recovered, gap_pass_audit = run_gap_targeted_pass(
+                scope_pdfs,
+                conn,
+                project,
+                vocab,
+                existing_pairs,
+                cli_provider=args.scope_pass2_llm_provider,
+            )
+            if gap_recovered:
+                normalized.extend(gap_recovered)
+            save_json(output_dir / "scope_gap_pass_audit.json", gap_pass_audit)
+        else:
+            save_json(
+                output_dir / "scope_gap_pass_audit.json",
+                {"enabled": False, "reason": "SCOPE_PASS2_ENABLED=false or --no-scope-pass2"},
+            )
+
         save_normalized(normalized, uncertain, norm_json)
 
         print("Step 3: candidati RACI da v_DocumentsEnriched...")
@@ -172,6 +217,8 @@ def main() -> int:
     summary = PipelineSummary(
         project_name=project,
         scope_pdfs=[p.name for p in scope_pdfs],
+        scope_llm_provider=pass1_provider,
+        scope_llm_model=pass1_model,
         disciplines_found=sorted({n.discipline_code for n in normalized}),
         chapters_found=sorted(
             {n.chapter_name for n in normalized if n.chapter_name}
@@ -186,6 +233,11 @@ def main() -> int:
         ),
         duplicates_removed=dup_removed,
         uncertain_mapping_count=len(uncertain),
+        scope_pass2_enabled=pass2_enabled,
+        scope_pass2_provider=pass2_provider if pass2_enabled else "",
+        scope_pass2_model=pass2_model if pass2_enabled else "",
+        scope_pass2_pairs_targeted=gap_pass_audit.get("missing_before_pass2", 0),
+        scope_pass2_pairs_recovered=gap_pass_audit.get("recovered_count", 0),
     )
     save_json(output_dir / "pipeline_summary.json", summary.to_dict())
 
