@@ -20,6 +20,7 @@ COL_DESCRIPTION = 2
 COL_FORMULA = 7
 COL_DISC = 9
 COL_TYPE = 10
+COL_PROG = 11  # K — progressive per coppia I+J
 COL_CATEGORY = 15
 COL_WBS = 21  # U
 COL_WORKFLOW = 27  # AA
@@ -68,7 +69,7 @@ def _copy_template_header(source: Worksheet, target: Worksheet, max_row: int = H
 
 
 def _reneco_code_formula(row: int) -> str:
-    """H (originator) and K (prog.no) are left empty for manual entry — same as template."""
+    """H (originator) is left empty for manual entry; K is the I+J pair progressive."""
     return f'="{RENCO_PREFIX}-"&H{row}&"-"&I{row}&J{row}&"-"&K{row}'
 
 
@@ -95,16 +96,23 @@ def write_mdr_excel(
     tpl_wb.close()
 
     proj = (project_code or "").strip() or "0000"
+    pair_progress: Dict[tuple[str, str], int] = {}
 
     for idx, doc in enumerate(documents):
         row = DATA_START_ROW + idx
         disc_value = doc.discipline_code
         if discipline_short_codes:
             disc_value = discipline_short_codes.get(disc_value, disc_value)
+        type_value = safe_excel_value(doc.type_code)
+        pair_key = (str(disc_value or ""), str(type_value or ""))
+        pair_progress[pair_key] = pair_progress.get(pair_key, 0) + 1
+        prog_value = f"{pair_progress[pair_key]:06d}"
+
         ws.cell(row=row, column=COL_ITEM, value=idx + 1)
         ws.cell(row=row, column=COL_DESCRIPTION, value=safe_excel_value(doc.title))
         ws.cell(row=row, column=COL_DISC, value=safe_excel_value(disc_value))
-        ws.cell(row=row, column=COL_TYPE, value=safe_excel_value(doc.type_code))
+        ws.cell(row=row, column=COL_TYPE, value=type_value)
+        ws.cell(row=row, column=COL_PROG, value=prog_value)
         ws.cell(row=row, column=COL_CATEGORY, value=safe_excel_value(doc.category_code))
         ws.cell(row=row, column=COL_WBS, value=safe_excel_value(doc.discipline_wbs))
         ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(doc.category_workflow))
