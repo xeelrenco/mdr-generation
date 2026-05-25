@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 import duckdb
 
@@ -24,6 +24,14 @@ def load_discipline_codes(conn: duckdb.DuckDBPyConnection) -> Set[str]:
         "SELECT Code FROM my_db.raci_matrix.Disciplines ORDER BY Code"
     ).fetchall()
     return {r[0] for r in rows if r[0]}
+
+
+def load_discipline_short_codes(conn: duckdb.DuckDBPyConnection) -> Dict[str, str]:
+    """Mappa Disciplines.Code → ShortCode (es. ELE → E)."""
+    rows = conn.execute(
+        "SELECT Code, ShortCode FROM my_db.raci_matrix.Disciplines"
+    ).fetchall()
+    return {r[0]: r[1] for r in rows if r[0] and r[1]}
 
 
 def load_chapter_names(conn: duckdb.DuckDBPyConnection) -> Set[str]:

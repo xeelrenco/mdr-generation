@@ -22,6 +22,7 @@ from mdr_generator.config import PROJECT_DIR, cfg, cfg_bool
 from mdr_generator.db import (
     connect_motherduck,
     fetch_documents_enriched_keys,
+    load_discipline_short_codes,
 )
 from mdr_generator.raci_vocabulary import load_raci_vocabulary
 from mdr_generator.models import PipelineSummary
@@ -115,6 +116,7 @@ def main() -> int:
 
     renco_cmp = None
     gap_pass_audit: dict = {"enabled": False}
+    discipline_short_codes: dict[str, str] = {}
     conn = connect_motherduck()
     try:
         chunk_on = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
@@ -195,6 +197,7 @@ def main() -> int:
         print(f"  -> {with_hist} con storico, {len(ranked) - with_hist} senza")
 
         valid_keys = fetch_documents_enriched_keys(conn)
+        discipline_short_codes = load_discipline_short_codes(conn)
 
         print("Step 5: selezione finale...")
         selected, dup_removed = select_documents(ranked, valid_keys)
@@ -262,7 +265,13 @@ def main() -> int:
 
     mdr_path = output_dir / f"{project}_{ts}_MDR.xlsx"
     print("Step 8: compilazione template MDR...")
-    write_mdr_excel(template_path, mdr_path, selected, project_code=project)
+    write_mdr_excel(
+        template_path,
+        mdr_path,
+        selected,
+        project_code=project,
+        discipline_short_codes=discipline_short_codes,
+    )
     print(f"  -> {mdr_path}")
     print("Completato.")
     return 0

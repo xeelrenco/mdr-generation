@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import copy
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
@@ -77,6 +77,7 @@ def write_mdr_excel(
     output_path: Path,
     documents: List[SelectedDocument],
     project_code: Optional[str] = None,
+    discipline_short_codes: Optional[Dict[str, str]] = None,
 ) -> Path:
     """
     Create a new xlsx from scratch: header copied from template, data rows written below.
@@ -97,9 +98,12 @@ def write_mdr_excel(
 
     for idx, doc in enumerate(documents):
         row = DATA_START_ROW + idx
+        disc_value = doc.discipline_code
+        if discipline_short_codes:
+            disc_value = discipline_short_codes.get(disc_value, disc_value)
         ws.cell(row=row, column=COL_ITEM, value=idx + 1)
         ws.cell(row=row, column=COL_DESCRIPTION, value=safe_excel_value(doc.title))
-        ws.cell(row=row, column=COL_DISC, value=safe_excel_value(doc.discipline_code))
+        ws.cell(row=row, column=COL_DISC, value=safe_excel_value(disc_value))
         ws.cell(row=row, column=COL_TYPE, value=safe_excel_value(doc.type_code))
         ws.cell(row=row, column=COL_CATEGORY, value=safe_excel_value(doc.category_code))
         ws.cell(row=row, column=COL_WBS, value=safe_excel_value(doc.discipline_wbs))
