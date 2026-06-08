@@ -262,7 +262,7 @@ def write_qa_report(
         [
             "   — durata timeline popolata",
             summary.duration_populated_count,
-            "Giorni da timeline_reconciliation",
+            "Giorni (FinishActualized − StartActualized) da v_TimelineTaskToMdrLinks_Dates; anche col. X",
         ],
         [
             "   — schedule attivo",

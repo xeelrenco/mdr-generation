@@ -13,11 +13,11 @@ from .utils import save_json
 TIMELINE_DURATION_SQL = """
 SELECT
     ConsolidatedTitleKey AS title_key,
-    MEDIAN(date_diff('day', SelectedStartDate, SelectedFinishDate)) AS duration_median,
+    MEDIAN(date_diff('day', StartActualized, FinishActualized)) AS duration_median,
     COUNT(*) AS sample_size
-FROM my_db.timeline_reconciliation.TimelineTaskToMdrLinks
-WHERE SelectedStartDate IS NOT NULL
-  AND SelectedFinishDate IS NOT NULL
+FROM my_db.timeline_reconciliation.v_TimelineTaskToMdrLinks_Dates
+WHERE StartActualized IS NOT NULL
+  AND FinishActualized IS NOT NULL
   AND ConsolidatedTitleKey IS NOT NULL
 GROUP BY 1
 """

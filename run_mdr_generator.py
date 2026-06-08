@@ -275,7 +275,8 @@ def main() -> int:
         duration_map = load_timeline_duration_map(conn)
         duration_populated = apply_timeline_duration(line_items, duration_map)
         print(
-            f"  -> {duration_populated}/{len(line_items)} righe con durata timeline"
+            f"  -> {duration_populated}/{len(line_items)} righe con durata timeline "
+            f"(anche colonna X quando disponibile)"
         )
 
         if schedule_enabled:
