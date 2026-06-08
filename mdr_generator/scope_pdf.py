@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -22,6 +23,7 @@ from .raci_vocabulary import (
 )
 from .utils import extract_json_payload, parse_json_response, save_json
 from .llm_usage import record_llm_usage
+from .parallel_workers import llm_parallel_workers, pipeline_log, run_parallel
 
 
 def _read_pdf_bytes(pdf_path: Path, max_mb: int) -> bytes:
@@ -545,6 +547,90 @@ def _extract_scope_single_call(
     return _parse_llm_signals(data, source_pdf=pdf_path.name, extraction_method="llm_pdf")
 
 
+@dataclass
+class _ChunkPassJob:
+    idx: int
+    page_start: int
+    page_end: int
+
+
+def _run_chunk_primary_pass(
+    job: _ChunkPassJob,
+    pdf_path: Path,
+    pdf_bytes: bytes,
+    vocab: RaciVocabulary,
+    provider: str,
+    model: Optional[str],
+    total_pages: int,
+) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+    chunk_bytes = _extract_pdf_page_range(pdf_bytes, job.page_start, job.page_end)
+    prompt = build_scope_pdf_chunk_prompt(vocab, job.page_start, job.page_end, total_pages)
+    upload_name = f"{pdf_path.stem}_p{job.page_start}-{job.page_end}.pdf"
+    data = _invoke_llm_pdf(
+        prompt,
+        pdf_path,
+        chunk_bytes,
+        provider,
+        model=model,
+        upload_name=upload_name,
+        stage="pass1_scope",
+    )
+    chunk_signals = _parse_llm_signals(
+        data,
+        source_pdf=pdf_path.name,
+        extraction_method="llm_pdf_chunk",
+        chunk_page_start=job.page_start,
+        chunk_page_end=job.page_end,
+    )
+    return job, chunk_signals
+
+
+def _run_chunk_repass(
+    job: _ChunkPassJob,
+    pdf_path: Path,
+    pdf_bytes: bytes,
+    vocab: RaciVocabulary,
+    provider: str,
+    model: Optional[str],
+    total_pages: int,
+) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+    chunk_bytes = _extract_pdf_page_range(pdf_bytes, job.page_start, job.page_end)
+    repass_prompt = build_scope_pdf_chunk_repass_prompt(
+        vocab, job.page_start, job.page_end, total_pages
+    )
+    repass_upload = f"{pdf_path.stem}_p{job.page_start}-{job.page_end}_repass.pdf"
+    repass_data = _invoke_llm_pdf(
+        repass_prompt,
+        pdf_path,
+        chunk_bytes,
+        provider,
+        model=model,
+        upload_name=repass_upload,
+        stage="pass1_scope_repass",
+    )
+    repass_signals = _parse_llm_signals(
+        repass_data,
+        source_pdf=pdf_path.name,
+        extraction_method="llm_pdf_chunk_repass",
+        chunk_page_start=job.page_start,
+        chunk_page_end=job.page_end,
+    )
+    return job, repass_signals
+
+
+def _merge_chunk_signals(
+    signals: List[RawScopeSignal],
+    seen: Set[tuple[str, str, Optional[str]]],
+    out: List[RawScopeSignal],
+) -> None:
+    for sig in signals:
+        key = (sig.discipline_code, sig.chapter_name, sig.scope_section)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(sig)
+
+
 def _extract_scope_chunked(
     pdf_path: Path,
     pdf_bytes: bytes,
@@ -562,85 +648,90 @@ def _extract_scope_chunked(
     seen: Set[tuple[str, str, Optional[str]]] = set()
     all_signals: List[RawScopeSignal] = []
     runs: List[Dict[str, Any]] = []
+    workers = llm_parallel_workers()
 
     print(
         f"  Chunking: {len(ranges)} chunk(s), "
         f"{chunk_pages} pag/chunk, overlap={overlap}, {total_pages} pag totali"
         + (", re-pass attivo" if repass_enabled else "")
+        + f", workers={workers}",
+        flush=True,
     )
 
+    def _chunk_desc(job: _ChunkPassJob) -> str:
+        return (
+            f"chunk {job.idx + 1}/{len(ranges)} "
+            f"pagine {job.page_start}-{job.page_end}"
+        )
+
+    def _chunk_note(_job: _ChunkPassJob, result: Tuple[_ChunkPassJob, List[RawScopeSignal]]) -> str:
+        return f"-> {len(result[1])} segnali"
+
+    primary_jobs = [
+        _ChunkPassJob(idx, page_start, page_end)
+        for idx, (page_start, page_end) in enumerate(ranges)
+    ]
+
+    def _primary_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+        return _run_chunk_primary_pass(
+            job, pdf_path, pdf_bytes, vocab, provider, model, total_pages
+        )
+
+    primary_results = run_parallel(
+        primary_jobs,
+        _primary_fn,
+        max_workers=workers,
+        label="pass1 chunk",
+        describe=_chunk_desc,
+        result_note=_chunk_note,
+    )
+    chunk_signals_by_idx: Dict[int, List[RawScopeSignal]] = {}
+    repass_jobs: List[_ChunkPassJob] = []
+    repass_skipped: Dict[int, str] = {}
+
+    for job, chunk_signals in sorted(primary_results, key=lambda x: x[0].idx):
+        chunk_signals_by_idx[job.idx] = chunk_signals
+        _merge_chunk_signals(chunk_signals, seen, all_signals)
+
+        if not repass_enabled or chunk_signals:
+            continue
+
+        text_len = _chunk_extracted_text_length(pdf_bytes, job.page_start, job.page_end)
+        if repass_min_chars > 0 and text_len > 0 and text_len < repass_min_chars:
+            repass_skipped[job.idx] = (
+                f"testo estratto insufficiente ({text_len} caratteri, "
+                f"soglia {repass_min_chars})"
+            )
+            pipeline_log(
+                f"  [pass1 re-pass] SKIP {_chunk_desc(job)} ({repass_skipped[job.idx]})"
+            )
+        else:
+            repass_jobs.append(job)
+
+    repass_signals_by_idx: Dict[int, List[RawScopeSignal]] = {}
+    if repass_jobs:
+        def _repass_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+            return _run_chunk_repass(
+                job, pdf_path, pdf_bytes, vocab, provider, model, total_pages
+            )
+
+        repass_results = run_parallel(
+            repass_jobs,
+            _repass_fn,
+            max_workers=workers,
+            label="pass1 re-pass",
+            describe=_chunk_desc,
+            result_note=_chunk_note,
+        )
+        for job, repass_signals in sorted(repass_results, key=lambda x: x[0].idx):
+            repass_signals_by_idx[job.idx] = repass_signals
+            _merge_chunk_signals(repass_signals, seen, all_signals)
+
     for idx, (page_start, page_end) in enumerate(ranges):
-        chunk_bytes = _extract_pdf_page_range(pdf_bytes, page_start, page_end)
-        prompt = build_scope_pdf_chunk_prompt(vocab, page_start, page_end, total_pages)
-        upload_name = f"{pdf_path.stem}_p{page_start}-{page_end}.pdf"
-        print(f"  LLM chunk {idx + 1}/{len(ranges)}: pagine {page_start}-{page_end}")
-
-        data = _invoke_llm_pdf(
-            prompt,
-            pdf_path,
-            chunk_bytes,
-            provider,
-            model=model,
-            upload_name=upload_name,
-            stage="pass1_scope",
-        )
-        chunk_signals = _parse_llm_signals(
-            data,
-            source_pdf=pdf_path.name,
-            seen=seen,
-            extraction_method="llm_pdf_chunk",
-            chunk_page_start=page_start,
-            chunk_page_end=page_end,
-        )
-        all_signals.extend(chunk_signals)
-
-        repass_signals: List[RawScopeSignal] = []
-        repass_attempted = False
-        repass_skipped_reason = ""
-        if repass_enabled and not chunk_signals:
-            text_len = _chunk_extracted_text_length(pdf_bytes, page_start, page_end)
-            if (
-                repass_min_chars > 0
-                and text_len > 0
-                and text_len < repass_min_chars
-            ):
-                repass_skipped_reason = (
-                    f"testo estratto insufficiente ({text_len} caratteri, "
-                    f"soglia {repass_min_chars})"
-                )
-                print(
-                    f"  Re-pass saltato chunk {idx + 1}/{len(ranges)}: "
-                    f"pagine {page_start}-{page_end} ({repass_skipped_reason})"
-                )
-            else:
-                repass_attempted = True
-                repass_prompt = build_scope_pdf_chunk_repass_prompt(
-                    vocab, page_start, page_end, total_pages
-                )
-                repass_upload = f"{pdf_path.stem}_p{page_start}-{page_end}_repass.pdf"
-                print(
-                    f"  LLM re-pass chunk {idx + 1}/{len(ranges)}: "
-                    f"pagine {page_start}-{page_end} (0 segnali al 1° pass)"
-                )
-                repass_data = _invoke_llm_pdf(
-                    repass_prompt,
-                    pdf_path,
-                    chunk_bytes,
-                    provider,
-                    model=model,
-                    upload_name=repass_upload,
-                    stage="pass1_scope_repass",
-                )
-                repass_signals = _parse_llm_signals(
-                    repass_data,
-                    source_pdf=pdf_path.name,
-                    seen=seen,
-                    extraction_method="llm_pdf_chunk_repass",
-                    chunk_page_start=page_start,
-                    chunk_page_end=page_end,
-                )
-                all_signals.extend(repass_signals)
-
+        chunk_signals = chunk_signals_by_idx.get(idx, [])
+        repass_signals = repass_signals_by_idx.get(idx, [])
+        repass_attempted = idx in repass_signals_by_idx
+        repass_skipped_reason = repass_skipped.get(idx, "")
         combined = chunk_signals + repass_signals
         disciplines = sorted({s.discipline_code for s in combined})
         runs.append(
@@ -668,6 +759,7 @@ def _extract_scope_chunked(
         "repass_min_chars": repass_min_chars,
         "total_pages": total_pages,
         "chunk_count": len(ranges),
+        "parallel_workers": workers,
         "runs": runs,
     }
     return all_signals, chunking_meta

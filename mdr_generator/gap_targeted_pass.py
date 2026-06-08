@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -9,6 +10,7 @@ import duckdb
 
 from .config import cfg_bool, cfg_int
 from .models import NormalizedSignal
+from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import RaciVocabulary, build_gap_targeted_pass_prompt
 from .renco_compare import fetch_renco_scope_pairs
 from .scope_pdf import (
@@ -77,6 +79,49 @@ def _raw_to_normalized(raw) -> Optional[NormalizedSignal]:
     )
 
 
+@dataclass
+class _GapChunkJob:
+    idx: int
+    page_start: int
+    page_end: int
+    target_list: List[Tuple[str, str]]
+
+
+def _run_gap_chunk_job(
+    job: _GapChunkJob,
+    pdf_path: Path,
+    pdf_bytes: bytes,
+    pass2_model: str,
+    total_pages: int,
+    pair_examples: Dict[Tuple[str, str], List[str]],
+) -> Tuple[_GapChunkJob, List]:
+    prompt = build_gap_targeted_pass_prompt(
+        job.target_list,
+        job.page_start,
+        job.page_end,
+        total_pages,
+        pair_examples=pair_examples,
+    )
+    chunk_bytes = extract_scope_pdf_pages(pdf_bytes, job.page_start, job.page_end)
+    upload_name = f"{pdf_path.stem}_gap_p{job.page_start}-{job.page_end}.pdf"
+    data = call_scope_llm_pdf(
+        prompt,
+        pdf_path,
+        chunk_bytes,
+        model=pass2_model,
+        pass_id="pass2",
+        upload_name=upload_name,
+    )
+    chunk_signals = parse_llm_scope_signals(
+        data,
+        source_pdf=pdf_path.name,
+        extraction_method="llm_gap_targeted_pass",
+        chunk_page_start=job.page_start,
+        chunk_page_end=job.page_end,
+    )
+    return job, chunk_signals
+
+
 def run_gap_targeted_pass(
     scope_pdfs: List[Path],
     conn: duckdb.DuckDBPyConnection,
@@ -101,6 +146,7 @@ def run_gap_targeted_pass(
         "enabled": True,
         "provider": pass2_provider,
         "model": pass2_model,
+        "llm_parallel_workers": llm_parallel_workers(),
         "renco_pairs_total": len(renco_pairs),
         "missing_before_pass2": len(missing),
         "max_pairs_limit": max_pairs,
@@ -137,38 +183,42 @@ def run_gap_targeted_pass(
             f"{len(ranges)} chunk(s), {len(pending)} coppie ancora da cercare"
         )
 
-        for idx, (page_start, page_end) in enumerate(ranges):
-            if not pending:
-                break
-            target_list = sorted(pending)
-            prompt = build_gap_targeted_pass_prompt(
-                target_list,
-                page_start,
-                page_end,
-                total_pages,
-                pair_examples=pair_examples,
+        target_snapshot = sorted(pending)
+        chunk_jobs = [
+            _GapChunkJob(idx, page_start, page_end, list(target_snapshot))
+            for idx, (page_start, page_end) in enumerate(ranges)
+        ]
+        workers = llm_parallel_workers()
+
+        def _gap_desc(job: _GapChunkJob) -> str:
+            return (
+                f"chunk {job.idx + 1}/{len(ranges)} "
+                f"pagine {job.page_start}-{job.page_end} "
+                f"(target={len(job.target_list)})"
             )
-            chunk_bytes = extract_scope_pdf_pages(pdf_bytes, page_start, page_end)
-            upload_name = f"{pdf_path.stem}_gap_p{page_start}-{page_end}.pdf"
-            print(
-                f"  LLM gap pass chunk {idx + 1}/{len(ranges)}: "
-                f"pagine {page_start}-{page_end}, target={len(target_list)}"
-            )
-            data = call_scope_llm_pdf(
-                prompt,
+
+        def _gap_note(_job: _GapChunkJob, result: Tuple[_GapChunkJob, List]) -> str:
+            return f"-> {len(result[1])} segnali LLM"
+
+        def _gap_fn(job: _GapChunkJob) -> Tuple[_GapChunkJob, List]:
+            return _run_gap_chunk_job(
+                job,
                 pdf_path,
-                chunk_bytes,
-                model=pass2_model,
-                pass_id="pass2",
-                upload_name=upload_name,
+                pdf_bytes,
+                pass2_model,
+                total_pages,
+                pair_examples,
             )
-            chunk_signals = parse_llm_scope_signals(
-                data,
-                source_pdf=pdf_path.name,
-                extraction_method="llm_gap_targeted_pass",
-                chunk_page_start=page_start,
-                chunk_page_end=page_end,
-            )
+
+        chunk_results = run_parallel(
+            chunk_jobs,
+            _gap_fn,
+            max_workers=workers,
+            label="pass2 gap",
+            describe=_gap_desc,
+            result_note=_gap_note,
+        )
+        for job, chunk_signals in sorted(chunk_results, key=lambda x: x[0].idx):
             found_pairs: List[str] = []
             for raw in chunk_signals:
                 pair = (raw.discipline_code, raw.chapter_name or "")
@@ -185,10 +235,10 @@ def run_gap_targeted_pass(
             audit["runs"].append(
                 {
                     "source_pdf": pdf_path.name,
-                    "chunk_index": idx,
-                    "page_start": page_start,
-                    "page_end": page_end,
-                    "target_count": len(target_list),
+                    "chunk_index": job.idx,
+                    "page_start": job.page_start,
+                    "page_end": job.page_end,
+                    "target_count": len(job.target_list),
                     "signal_count": len(chunk_signals),
                     "recovered_pairs": found_pairs,
                 }

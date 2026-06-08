@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -14,6 +15,7 @@ from .models import (
     RawScopeSignal,
 )
 from .pair_scope_context import build_pair_sow_context_chunks
+from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_scalable_instance_prompt
 from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes
 from .utils import save_json
@@ -374,6 +376,46 @@ def _run_scalable_llm_for_pair(
     return decisions, rows, llm_parts_audit
 
 
+@dataclass
+class _ScalablePairJob:
+    pair: Tuple[str, str]
+    scalable: List[RaciCandidate]
+    context_chunks: List[str]
+    context_meta: dict
+    source_pdf: str
+    pair_audit: dict
+
+
+def _run_scalable_pair_job(
+    job: _ScalablePairJob,
+    hist_map: Dict[str, List[str]],
+    model: Optional[str],
+) -> Tuple[_ScalablePairJob, List[DocumentScopeDecision], int]:
+    disc, chap = job.pair
+    try:
+        decisions, rows, llm_parts = _run_scalable_llm_for_pair(
+            disc,
+            chap,
+            job.scalable,
+            job.context_chunks,
+            job.context_meta,
+            job.source_pdf,
+            hist_map,
+            model,
+        )
+        job.pair_audit["outcome"] = "ok"
+        job.pair_audit["decisions"] = rows
+        job.pair_audit["llm_parts"] = llm_parts
+        return job, decisions, len(job.context_chunks)
+    except Exception as ex:
+        job.pair_audit["outcome"] = "llm_error"
+        job.pair_audit["error"] = str(ex)
+        fallback = [
+            _fallback_scalable_decision(cand, f"LLM error: {ex}") for cand in job.scalable
+        ]
+        return job, fallback, len(job.context_chunks)
+
+
 def run_document_scope_pass(
     scope_pdfs: List[Path],
     raw_signals: List[RawScopeSignal],
@@ -411,6 +453,7 @@ def run_document_scope_pass(
     non_scalable_auto = 0
     scalable_llm = 0
     llm_calls = 0
+    scalable_jobs: List[_ScalablePairJob] = []
 
     for pair, pair_candidates in sorted(grouped.items()):
         disc, chap = pair
@@ -454,49 +497,52 @@ def run_document_scope_pass(
             pairs_split += 1
 
         source_pdf = scope_pdfs[0].name if scope_pdfs else ""
-
-        try:
-            decisions, rows, llm_parts = _run_scalable_llm_for_pair(
-                disc,
-                chap,
-                scalable,
-                context_chunks,
-                context_meta,
-                source_pdf,
-                hist_map,
-                model,
+        scalable_jobs.append(
+            _ScalablePairJob(
+                pair=pair,
+                scalable=scalable,
+                context_chunks=context_chunks,
+                context_meta=context_meta,
+                source_pdf=source_pdf,
+                pair_audit=pair_audit,
             )
-            pair_audit["outcome"] = "ok"
-            pair_audit["decisions"] = rows
-            pair_audit["llm_parts"] = llm_parts
+        )
+
+    if scalable_jobs:
+        workers = llm_parallel_workers()
+
+        def _scalable_desc(job: _ScalablePairJob) -> str:
+            disc, chap = job.pair
+            return f"{disc}|{chap}"
+
+        def _scalable_note(
+            job: _ScalablePairJob,
+            _result: Tuple[_ScalablePairJob, List[DocumentScopeDecision], int],
+        ) -> str:
+            parts = job.context_meta.get("context_parts", 1)
+            chars = job.context_meta.get("context_total_chars", 0)
+            split = f", split={parts}" if parts > 1 else ""
+            if job.pair_audit.get("outcome") == "ok":
+                return f"ok ({len(job.scalable)} doc, {chars} chars{split})"
+            return f"ERROR ({job.pair_audit.get('error', '?')})"
+
+        def _job_fn(job: _ScalablePairJob) -> Tuple[_ScalablePairJob, List[DocumentScopeDecision], int]:
+            return _run_scalable_pair_job(job, hist_map, model)
+
+        job_results = run_parallel(
+            scalable_jobs,
+            _job_fn,
+            max_workers=workers,
+            label="3b Scalable",
+            describe=_scalable_desc,
+            result_note=_scalable_note,
+        )
+        for job, decisions, call_count in sorted(job_results, key=lambda x: x[0].pair):
             all_decisions.extend(decisions)
             pairs_llm += 1
-            scalable_llm += len(scalable)
-            llm_calls += len(context_chunks)
-
-            parts = context_meta.get("context_parts", 1)
-            total_chars = context_meta.get("context_total_chars", 0)
-            split_note = f", SPLIT {parts} parts" if parts > 1 else ""
-            print(
-                f"  Scalable instances {disc}|{chap}: ok "
-                f"({len(scalable)} doc, {total_chars} chars{split_note})"
-            )
-        except Exception as ex:
-            pair_audit["outcome"] = "llm_error"
-            pair_audit["error"] = str(ex)
-            for cand in scalable:
-                all_decisions.append(
-                    _fallback_scalable_decision(
-                        cand,
-                        f"LLM error: {ex}",
-                    )
-                )
-            pairs_llm += 1
-            scalable_llm += len(scalable)
-            llm_calls += len(context_chunks)
-            print(f"  Scalable instances {disc}|{chap}: llm_error ({ex})")
-
-        audit.append(pair_audit)
+            scalable_llm += len(job.scalable)
+            llm_calls += call_count
+            audit.append(job.pair_audit)
 
     save_json(
         json_dir / "document_scope_audit.json",
@@ -508,6 +554,7 @@ def run_document_scope_pass(
             "llm_calls_total": llm_calls,
             "non_scalable_auto_included": non_scalable_auto,
             "scalable_documents_llm": scalable_llm,
+            "llm_parallel_workers": llm_parallel_workers(),
             "pairs": audit,
         },
     )

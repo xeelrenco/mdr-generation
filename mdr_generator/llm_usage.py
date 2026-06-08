@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -106,10 +107,12 @@ class LlmUsageTracker:
 
 
 _tracker = LlmUsageTracker()
+_usage_lock = threading.Lock()
 
 
 def reset_usage_tracker() -> None:
-    _tracker.reset()
+    with _usage_lock:
+        _tracker.reset()
 
 
 def record_llm_usage(
@@ -120,7 +123,8 @@ def record_llm_usage(
     input_tokens: int,
     output_tokens: int,
 ) -> None:
-    _tracker.record(provider, model, stage, call_type, input_tokens, output_tokens)
+    with _usage_lock:
+        _tracker.record(provider, model, stage, call_type, input_tokens, output_tokens)
 
 
 def _model_price_per_1m(model: str, direction: str) -> float:

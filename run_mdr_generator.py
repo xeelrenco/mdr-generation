@@ -36,6 +36,7 @@ from mdr_generator.llm_usage import (
     reset_usage_tracker,
     save_usage_audit,
 )
+from mdr_generator.parallel_workers import llm_parallel_workers
 from mdr_generator.models import PipelineSummary
 from mdr_generator.scope_pdf import resolve_scope_llm_config
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
@@ -137,6 +138,7 @@ def main() -> int:
     else:
         print("LLM pass 2 (gap):   disabilitato")
     print(f"Schedule (Step 5):   {'attivo' if schedule_enabled else 'disabilitato'}")
+    print(f"LLM parallel workers: {llm_parallel_workers()}")
     print(f"Output Excel:      {output_dir}")
     print(f"Output JSON/audit: {json_dir}")
 
