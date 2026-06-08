@@ -19,7 +19,12 @@ from .models import (
     SelectedDocument,
     UncertainMapping,
 )
-from .llm_usage import LlmUsageSummary, format_cost_usd, format_token_count
+from .llm_usage import (
+    LlmUsageSummary,
+    format_cost_usd,
+    format_token_count,
+    provider_billing_label,
+)
 from .utils import format_elapsed_seconds, safe_excel_value
 
 GeneratedDoc = Union[MdrLineItem, SelectedDocument]
@@ -295,6 +300,18 @@ def write_qa_report(
             ),
         ],
     ]
+    if llm_usage and llm_usage.provider_cost_usd:
+        for provider, amount in sorted(
+            llm_usage.provider_cost_usd.items(),
+            key=lambda item: (-item[1], item[0]),
+        ):
+            pipeline_rows.append(
+                [
+                    f"   — {provider_billing_label(provider)}",
+                    format_cost_usd(amount),
+                    "Fatturazione separata per provider",
+                ]
+            )
     if llm_usage and llm_usage.lines:
         for line in llm_usage.lines:
             pipeline_rows.append(

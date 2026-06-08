@@ -46,6 +46,7 @@ class LlmUsageSummary:
     total_output_tokens: int = 0
     total_calls: int = 0
     lines: List[LlmCostLine] = field(default_factory=list)
+    provider_cost_usd: Dict[str, float] = field(default_factory=dict)
     pricing_note: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -54,6 +55,9 @@ class LlmUsageSummary:
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
             "total_calls": self.total_calls,
+            "provider_cost_usd": {
+                k: round(v, 4) for k, v in sorted(self.provider_cost_usd.items())
+            },
             "pricing_note": self.pricing_note,
             "lines": [line.to_dict() for line in self.lines],
         }
@@ -61,8 +65,8 @@ class LlmUsageSummary:
 
 # USD per 1M tokens — stime default, sovrascrivibili in config.txt
 _DEFAULT_PRICE_PER_1M: Dict[Tuple[str, str], float] = {
-    ("gpt-5.5", "input"): 2.50,
-    ("gpt-5.5", "output"): 10.00,
+    ("gpt-5.5", "input"): 5.00,
+    ("gpt-5.5", "output"): 30.00,
     ("gpt-4o", "input"): 2.50,
     ("gpt-4o", "output"): 10.00,
     ("gpt-4o-mini", "input"): 0.15,
@@ -183,15 +187,21 @@ def build_usage_summary() -> LlmUsageSummary:
         key=lambda x: (-x.cost_usd, x.stage, x.model),
     )
     total_cost = sum(line.cost_usd for line in lines)
+    provider_cost: Dict[str, float] = {}
+    for line in lines:
+        provider_cost[line.provider] = provider_cost.get(line.provider, 0.0) + line.cost_usd
     return LlmUsageSummary(
         total_cost_usd=round(total_cost, 4),
         total_input_tokens=total_in,
         total_output_tokens=total_out,
         total_calls=len(_tracker.calls),
         lines=lines,
+        provider_cost_usd=provider_cost,
         pricing_note=(
-            "Stima da token API e tariffe default/config (LLM_PRICE_USD_PER_1M_*); "
-            "PDF multimodali possono divergere dal conteggio reale fatturato."
+            "Stima da token API e tariffe default/config (LLM_PRICE_USD_PER_1M_*). "
+            "gpt-5.5: $5/M input, $30/M output (standard ≤272K). "
+            "OpenAI e Gemini/Vertex fatturati separatamente. "
+            "Cached input e PDF multimodali possono divergere dal billing reale."
         ),
     )
 
@@ -212,6 +222,15 @@ def format_token_count(n: int) -> str:
     return str(n)
 
 
+def provider_billing_label(provider: str) -> str:
+    labels = {
+        "openai": "OpenAI",
+        "gemini": "Gemini/Vertex",
+        "claude": "Anthropic",
+    }
+    return labels.get(provider, provider)
+
+
 def format_usage_console(summary: LlmUsageSummary) -> str:
     if summary.total_calls == 0:
         return "Stima costi LLM: nessuna chiamata registrata"
@@ -224,6 +243,13 @@ def format_usage_console(summary: LlmUsageSummary) -> str:
     if not summary.lines:
         return head
     parts = [head]
+    for provider, amount in sorted(
+        summary.provider_cost_usd.items(),
+        key=lambda item: (-item[1], item[0]),
+    ):
+        parts.append(
+            f"  {provider_billing_label(provider)}: {format_cost_usd(amount)}"
+        )
     for line in summary.lines:
         parts.append(
             f"  {line.stage} ({line.model}, {line.call_type}): "

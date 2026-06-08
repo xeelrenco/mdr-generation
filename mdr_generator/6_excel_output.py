@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Union
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.filters import FilterColumn
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .models import MdrLineItem, SelectedDocument
@@ -19,7 +20,7 @@ LineItemLike = Union[MdrLineItem, SelectedDocument]
 DATA_START_ROW = 14
 HEADER_LAST_ROW = 13
 COL_ITEM = 1
-COL_DESCRIPTION = 2
+COL_DESCRIPTION = 2  # B — unica colonna dati per intestazione unita B13:F13
 COL_FORMULA = 7
 COL_DISC = 9
 COL_TYPE = 10
@@ -31,6 +32,9 @@ COL_PLANNED_FIRST_ISSUE = 29  # AC — PLANNED FIRST ISSUE (AD non compilata per
 FILTER_HEADER_ROW = 13
 FILTER_FIRST_COL = "A"
 FILTER_LAST_COL = "AI"  # col 35 — KBS INTERNAL CODE
+# Template: B13:F13 merged — filtro descrizione solo su colonna B (offset 1 da A).
+FILTER_MERGED_DESC_FIRST_COL = COL_DESCRIPTION
+FILTER_MERGED_DESC_LAST_COL = 6  # F
 SHEET_NAME = "MDR"
 RENCO_PREFIX = "8360"
 DATE_NUMBER_FORMAT = "mm-dd-yy"
@@ -115,12 +119,26 @@ def _write_date_cell(ws: Worksheet, row: int, column: int, value: Optional[date]
 
 
 def _apply_mdr_auto_filter(ws: Worksheet, last_data_row: int) -> None:
-    """Filtri e ordinamento Excel sulla riga intestazione (A13:AI13 + dati)."""
+    """Filtri Excel su riga 13 e dati sotto (A13:AI).
+
+    B13:F13 e' un'intestazione unita: mostra un solo filtro sulla colonna B;
+    nasconde i pulsante filtro su C-F (colId 2-5 rispetto ad A).
+    """
     if last_data_row < FILTER_HEADER_ROW:
         last_data_row = FILTER_HEADER_ROW
     ws.auto_filter.ref = (
         f"{FILTER_FIRST_COL}{FILTER_HEADER_ROW}:{FILTER_LAST_COL}{last_data_row}"
     )
+    ws.auto_filter.filterColumn.clear()
+    first_col_idx = ws[FILTER_FIRST_COL + "1"].column
+    for col_idx in range(
+        FILTER_MERGED_DESC_FIRST_COL + 1,
+        FILTER_MERGED_DESC_LAST_COL + 1,
+    ):
+        col_id = col_idx - first_col_idx
+        ws.auto_filter.filterColumn.append(
+            FilterColumn(colId=col_id, hiddenButton=True)
+        )
 
 
 def write_mdr_excel(
