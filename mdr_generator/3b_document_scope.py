@@ -312,7 +312,7 @@ def _run_scalable_llm_for_pair(
             context_chunks[0],
             historical_examples=hist_map,
         )
-        data = call_scope_llm_text(prompt, model=model, pass_id="pass1")
+        data = call_scope_llm_text(prompt, model=model, pass_id="pass1", stage="pass3b_scalable")
         decisions, rows = _parse_scalable_instance_decisions(
             data,
             scalable,
@@ -343,7 +343,7 @@ def _run_scalable_llm_for_pair(
             part_index=idx,
             part_total=part_total,
         )
-        data = call_scope_llm_text(prompt, model=model, pass_id="pass1")
+        data = call_scope_llm_text(prompt, model=model, pass_id="pass1", stage="pass3b_scalable")
         partial, rows = _parse_scalable_instance_decisions(
             data,
             scalable,
@@ -380,7 +380,7 @@ def run_document_scope_pass(
     normalized: List[NormalizedSignal],
     candidates: List[RaciCandidate],
     profiles: Dict[str, DocumentEffortProfile],
-    output_dir: Path,
+    json_dir: Path,
     model: Optional[str] = None,
 ) -> Tuple[List[DocumentScopeDecision], List[dict]]:
     if not scope_pdfs:
@@ -499,7 +499,7 @@ def run_document_scope_pass(
         audit.append(pair_audit)
 
     save_json(
-        output_dir / "document_scope_audit.json",
+        json_dir / "document_scope_audit.json",
         {
             "mode": "scalable_instances_text_context",
             "pairs_llm": pairs_llm,

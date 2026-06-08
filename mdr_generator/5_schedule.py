@@ -89,7 +89,7 @@ def _topological_order(
 def schedule_line_items(
     conn: duckdb.DuckDBPyConnection,
     line_items: List[MdrLineItem],
-    output_dir: Path,
+    json_dir: Path,
     *,
     enabled: bool = True,
 ) -> Tuple[List[MdrLineItem], dict]:
@@ -148,5 +148,5 @@ def schedule_line_items(
         "cycle_audit": cycle_audit,
         "scheduled_rows": sum(1 for i in line_items if i.planned_start),
     }
-    save_json(output_dir / "schedule_audit.json", audit)
+    save_json(json_dir / "schedule_audit.json", audit)
     return line_items, audit

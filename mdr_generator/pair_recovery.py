@@ -192,7 +192,13 @@ def recover_rejected_pairs(
         )
 
         data = call_scope_llm_pdf(
-            prompt, pdf_path, chunk_bytes, model=model, pass_id="pass1", upload_name=upload_name
+            prompt,
+            pdf_path,
+            chunk_bytes,
+            model=model,
+            pass_id="pass1",
+            upload_name=upload_name,
+            stage="pass1_pair_recovery",
         )
         parsed = _parse_recovery_response(data)
         if not parsed:

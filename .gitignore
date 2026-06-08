@@ -2,8 +2,7 @@ config.txt
 __pycache__/
 *.pyc
 .venv/
-output/*
-!output/.gitkeep
+/output/**
 mdr_generator/__pycache__/
 input/
 project-5469d685-421b-4832-8bb-50b0d702babb.json

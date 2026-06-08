@@ -48,6 +48,25 @@ def safe_excel_value(value: Any) -> Any:
     return ILLEGAL_XLSX_CHARS_RE.sub("", value)[:32767]
 
 
+def resolve_json_output_dir(output_dir: Path) -> Path:
+    """Directory for JSON audit/intermediate files (separate from Excel deliverables)."""
+    json_dir = output_dir / "json"
+    json_dir.mkdir(parents=True, exist_ok=True)
+    return json_dir
+
+
+def format_elapsed_seconds(seconds: float) -> str:
+    """Human-readable duration for logs and QA report."""
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def save_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

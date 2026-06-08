@@ -21,6 +21,7 @@ from .raci_vocabulary import (
     build_scope_pdf_prompt,
 )
 from .utils import extract_json_payload, parse_json_response, save_json
+from .llm_usage import record_llm_usage
 
 
 def _read_pdf_bytes(pdf_path: Path, max_mb: int) -> bytes:
@@ -178,6 +179,48 @@ def _openai_supports_custom_temperature(model: str) -> bool:
     return not m.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+def _record_openai_usage(response: Any, model: str, stage: str, call_type: str) -> None:
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return
+    record_llm_usage(
+        "openai",
+        model,
+        stage,
+        call_type,
+        getattr(usage, "prompt_tokens", 0) or 0,
+        getattr(usage, "completion_tokens", 0) or 0,
+    )
+
+
+def _record_gemini_usage(response: Any, model: str, stage: str, call_type: str) -> None:
+    meta = getattr(response, "usage_metadata", None)
+    if not meta:
+        return
+    record_llm_usage(
+        "gemini",
+        model,
+        stage,
+        call_type,
+        getattr(meta, "prompt_token_count", 0) or 0,
+        getattr(meta, "candidates_token_count", 0) or 0,
+    )
+
+
+def _record_claude_usage(message: Any, model: str, stage: str, call_type: str) -> None:
+    usage = getattr(message, "usage", None)
+    if not usage:
+        return
+    record_llm_usage(
+        "claude",
+        model,
+        stage,
+        call_type,
+        getattr(usage, "input_tokens", 0) or 0,
+        getattr(usage, "output_tokens", 0) or 0,
+    )
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
 def _call_openai_pdf(
     prompt: str,
@@ -186,6 +229,8 @@ def _call_openai_pdf(
     model: str,
     api_key: str,
     upload_name: Optional[str] = None,
+    *,
+    stage: str = "pass1_scope",
 ) -> Dict[str, Any]:
     from openai import OpenAI
 
@@ -213,11 +258,18 @@ def _call_openai_pdf(
     if _openai_supports_custom_temperature(model):
         create_kwargs["temperature"] = 0.1
     response = client.chat.completions.create(**create_kwargs)
+    _record_openai_usage(response, model, stage, "pdf")
     return parse_json_response(response.choices[0].message.content or "{}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
-def _call_gemini_pdf(prompt: str, pdf_bytes: bytes, model: str) -> Dict[str, Any]:
+def _call_gemini_pdf(
+    prompt: str,
+    pdf_bytes: bytes,
+    model: str,
+    *,
+    stage: str = "pass1_scope",
+) -> Dict[str, Any]:
     from google import genai
     from google.genai import types
 
@@ -246,6 +298,7 @@ def _call_gemini_pdf(prompt: str, pdf_bytes: bytes, model: str) -> Dict[str, Any
             response_mime_type="application/json",
         ),
     )
+    _record_gemini_usage(response, model, stage, "pdf")
     return parse_json_response(getattr(response, "text", None) or "{}")
 
 
@@ -274,6 +327,8 @@ def _call_claude_pdf(
     pdf_bytes: bytes,
     model: str,
     api_key: str,
+    *,
+    stage: str = "pass1_scope",
 ) -> Dict[str, Any]:
     import anthropic
 
@@ -328,6 +383,7 @@ def _call_claude_pdf(
         )
 
     raw_text = _extract_anthropic_text(message)
+    _record_claude_usage(message, model, stage, "pdf")
     try:
         return parse_json_response(raw_text)
     except json.JSONDecodeError as e:
@@ -344,17 +400,19 @@ def _invoke_llm_pdf(
     provider: str,
     model: Optional[str] = None,
     upload_name: Optional[str] = None,
+    *,
+    stage: str = "pass1_scope",
 ) -> Dict[str, Any]:
     provider = (provider or "openai").lower()
     if provider == "gemini":
         resolved = model or cfg("GEMINI_MODEL", "gemini-2.0-flash")
-        return _call_gemini_pdf(prompt, pdf_bytes, resolved)
+        return _call_gemini_pdf(prompt, pdf_bytes, resolved, stage=stage)
     if provider == "claude":
         api_key = cfg("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY richiesta per provider LLM claude")
         resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
-        return _call_claude_pdf(prompt, pdf_bytes, resolved, api_key)
+        return _call_claude_pdf(prompt, pdf_bytes, resolved, api_key, stage=stage)
     if provider != "openai":
         raise RuntimeError(f"Provider LLM scope non supportato: {provider}")
     api_key = cfg("OPENAI_API_KEY")
@@ -362,12 +420,20 @@ def _invoke_llm_pdf(
         raise RuntimeError("OPENAI_API_KEY richiesta per provider LLM openai")
     resolved = model or cfg("OPENAI_MODEL", "gpt-4o")
     return _call_openai_pdf(
-        prompt, pdf_path, pdf_bytes, resolved, api_key, upload_name=upload_name
+        prompt,
+        pdf_path,
+        pdf_bytes,
+        resolved,
+        api_key,
+        upload_name=upload_name,
+        stage=stage,
     )
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
-def _call_openai_text(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
+def _call_openai_text(
+    prompt: str, model: str, api_key: str, *, stage: str = "pass3b_scalable"
+) -> Dict[str, Any]:
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key)
@@ -379,11 +445,14 @@ def _call_openai_text(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
     if _openai_supports_custom_temperature(model):
         create_kwargs["temperature"] = 0.1
     response = client.chat.completions.create(**create_kwargs)
+    _record_openai_usage(response, model, stage, "text")
     return parse_json_response(response.choices[0].message.content or "{}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
-def _call_gemini_text(prompt: str, model: str) -> Dict[str, Any]:
+def _call_gemini_text(
+    prompt: str, model: str, *, stage: str = "pass3b_scalable"
+) -> Dict[str, Any]:
     from google import genai
     from google.genai import types
 
@@ -406,11 +475,14 @@ def _call_gemini_text(prompt: str, model: str) -> Dict[str, Any]:
             response_mime_type="application/json",
         ),
     )
+    _record_gemini_usage(response, model, stage, "text")
     return parse_json_response(getattr(response, "text", None) or "{}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
-def _call_claude_text(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
+def _call_claude_text(
+    prompt: str, model: str, api_key: str, *, stage: str = "pass3b_scalable"
+) -> Dict[str, Any]:
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -428,6 +500,7 @@ def _call_claude_text(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
     if _claude_supports_custom_temperature(model):
         create_kwargs["temperature"] = 0.1
     message = client.messages.create(**create_kwargs)
+    _record_claude_usage(message, model, stage, "text")
     raw_text = _extract_anthropic_text(message)
     return parse_json_response(raw_text)
 
@@ -436,24 +509,26 @@ def _invoke_llm_text(
     prompt: str,
     provider: str,
     model: Optional[str] = None,
+    *,
+    stage: str = "pass3b_scalable",
 ) -> Dict[str, Any]:
     provider = (provider or "openai").lower()
     if provider == "gemini":
         resolved = model or cfg("GEMINI_MODEL", "gemini-2.0-flash")
-        return _call_gemini_text(prompt, resolved)
+        return _call_gemini_text(prompt, resolved, stage=stage)
     if provider == "claude":
         api_key = cfg("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY richiesta per provider LLM claude")
         resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
-        return _call_claude_text(prompt, resolved, api_key)
+        return _call_claude_text(prompt, resolved, api_key, stage=stage)
     if provider != "openai":
         raise RuntimeError(f"Provider LLM scope non supportato: {provider}")
     api_key = cfg("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY richiesta per provider LLM openai")
     resolved = model or cfg("OPENAI_MODEL", "gpt-4o")
-    return _call_openai_text(prompt, resolved, api_key)
+    return _call_openai_text(prompt, resolved, api_key, stage=stage)
 
 
 def _extract_scope_single_call(
@@ -464,7 +539,9 @@ def _extract_scope_single_call(
     model: Optional[str] = None,
 ) -> List[RawScopeSignal]:
     prompt = build_scope_pdf_prompt(vocab)
-    data = _invoke_llm_pdf(prompt, pdf_path, pdf_bytes, provider, model=model)
+    data = _invoke_llm_pdf(
+        prompt, pdf_path, pdf_bytes, provider, model=model, stage="pass1_scope"
+    )
     return _parse_llm_signals(data, source_pdf=pdf_path.name, extraction_method="llm_pdf")
 
 
@@ -499,7 +576,13 @@ def _extract_scope_chunked(
         print(f"  LLM chunk {idx + 1}/{len(ranges)}: pagine {page_start}-{page_end}")
 
         data = _invoke_llm_pdf(
-            prompt, pdf_path, chunk_bytes, provider, model=model, upload_name=upload_name
+            prompt,
+            pdf_path,
+            chunk_bytes,
+            provider,
+            model=model,
+            upload_name=upload_name,
+            stage="pass1_scope",
         )
         chunk_signals = _parse_llm_signals(
             data,
@@ -546,6 +629,7 @@ def _extract_scope_chunked(
                     provider,
                     model=model,
                     upload_name=repass_upload,
+                    stage="pass1_scope_repass",
                 )
                 repass_signals = _parse_llm_signals(
                     repass_data,
@@ -735,6 +819,16 @@ def resolve_scope_llm_model(cli_model: Optional[str] = None) -> str:
     return resolve_scope_llm_config("pass1", cli_model=cli_model)[1]
 
 
+def _resolve_llm_stage(pass_id: str, stage: Optional[str] = None) -> str:
+    if stage:
+        return stage
+    return {
+        "pass1": "pass1_scope",
+        "pass2": "pass2_gap",
+        "pass3b": "pass3b_scalable",
+    }.get((pass_id or "pass1").lower(), "pass1_scope")
+
+
 def call_scope_llm_pdf(
     prompt: str,
     pdf_path: Path,
@@ -742,10 +836,19 @@ def call_scope_llm_pdf(
     model: Optional[str] = None,
     pass_id: str = "pass1",
     upload_name: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
 ) -> Dict[str, Any]:
     provider, resolved_model = resolve_scope_llm_config(pass_id, cli_model=model)
+    resolved_stage = _resolve_llm_stage(pass_id, stage)
     return _invoke_llm_pdf(
-        prompt, pdf_path, pdf_bytes, provider, model=resolved_model, upload_name=upload_name
+        prompt,
+        pdf_path,
+        pdf_bytes,
+        provider,
+        model=resolved_model,
+        upload_name=upload_name,
+        stage=resolved_stage,
     )
 
 
@@ -753,6 +856,11 @@ def call_scope_llm_text(
     prompt: str,
     model: Optional[str] = None,
     pass_id: str = "pass1",
+    *,
+    stage: Optional[str] = None,
 ) -> Dict[str, Any]:
     provider, resolved_model = resolve_scope_llm_config(pass_id, cli_model=model)
-    return _invoke_llm_text(prompt, provider, model=resolved_model)
+    resolved_stage = _resolve_llm_stage(pass_id, stage)
+    return _invoke_llm_text(
+        prompt, provider, model=resolved_model, stage=resolved_stage
+    )

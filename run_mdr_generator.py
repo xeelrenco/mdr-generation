@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -29,10 +30,16 @@ from mdr_generator.document_effort_profile import (
     save_document_effort_profiles,
 )
 from mdr_generator.raci_vocabulary import load_raci_vocabulary
+from mdr_generator.llm_usage import (
+    build_usage_summary,
+    format_usage_console,
+    reset_usage_tracker,
+    save_usage_audit,
+)
 from mdr_generator.models import PipelineSummary
 from mdr_generator.scope_pdf import resolve_scope_llm_config
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
-from mdr_generator.utils import save_json
+from mdr_generator.utils import format_elapsed_seconds, resolve_json_output_dir, save_json
 
 _im = importlib.import_module
 fetch_raci_candidates = _im("mdr_generator.3_candidates").fetch_raci_candidates
@@ -103,8 +110,11 @@ def main() -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    json_dir = resolve_json_output_dir(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     project = args.project_name
+    pipeline_started_at = time.perf_counter()
+    reset_usage_tracker()
 
     try:
         scope_pdfs = resolve_scope_pdfs(args.scope_pdf)
@@ -127,10 +137,12 @@ def main() -> int:
     else:
         print("LLM pass 2 (gap):   disabilitato")
     print(f"Schedule (Fase 6):   {'attivo' if schedule_enabled else 'disabilitato'}")
+    print(f"Output Excel:      {output_dir}")
+    print(f"Output JSON/audit: {json_dir}")
 
-    raw_json = output_dir / "scope_raw_signals.json"
-    norm_json = output_dir / "scope_normalized_signals.json"
-    candidates_csv = output_dir / "raci_candidates.csv"
+    raw_json = json_dir / "scope_raw_signals.json"
+    norm_json = json_dir / "scope_normalized_signals.json"
+    candidates_csv = json_dir / "raci_candidates.csv"
 
     renco_cmp = None
     gap_pass_audit: dict = {"enabled": False}
@@ -184,7 +196,7 @@ def main() -> int:
         )
         if recovered:
             normalized.extend(recovered)
-        save_json(output_dir / "scope_pair_recovery_audit.json", recovery_audit)
+        save_json(json_dir / "scope_pair_recovery_audit.json", recovery_audit)
         n_ok = sum(1 for a in recovery_audit if a.get("outcome") == "recovered")
         n_dup = sum(1 for a in recovery_audit if a.get("outcome") == "duplicate")
         print(
@@ -204,10 +216,10 @@ def main() -> int:
             )
             if gap_recovered:
                 normalized.extend(gap_recovered)
-            save_json(output_dir / "scope_gap_pass_audit.json", gap_pass_audit)
+            save_json(json_dir / "scope_gap_pass_audit.json", gap_pass_audit)
         else:
             save_json(
-                output_dir / "scope_gap_pass_audit.json",
+                json_dir / "scope_gap_pass_audit.json",
                 {
                     "enabled": False,
                     "reason": "SCOPE_PASS2_ENABLED=false or --no-scope-pass2",
@@ -219,7 +231,7 @@ def main() -> int:
         print("Step 3a: profili documento (Scalable, timeline, esempi storici)...")
         profiles = load_document_effort_profiles(conn)
         save_document_effort_profiles(
-            profiles, output_dir / "document_effort_profiles.json"
+            profiles, json_dir / "document_effort_profiles.json"
         )
         print(f"  -> {len(profiles)} profili TitleKey")
 
@@ -242,7 +254,7 @@ def main() -> int:
             normalized,
             ranked,
             profiles,
-            output_dir,
+            json_dir,
             model=args.scope_llm_model,
         )
         in_scope = [d for d in scope_decisions if d.in_scope]
@@ -268,7 +280,7 @@ def main() -> int:
             line_items, sched_audit = schedule_line_items(
                 conn,
                 line_items,
-                output_dir,
+                json_dir,
                 enabled=True,
             )
             print(
@@ -276,7 +288,7 @@ def main() -> int:
             )
         else:
             save_json(
-                output_dir / "schedule_audit.json",
+                json_dir / "schedule_audit.json",
                 {"enabled": False, "reason": "SCHEDULE_ENABLED=false or --no-schedule"},
             )
 
@@ -293,6 +305,28 @@ def main() -> int:
         conn.close()
 
     distinct_keys = len({i.raci_title_key for i in line_items})
+    report_path = output_dir / f"{project}_{ts}_generation_report.xlsx"
+    mdr_path = output_dir / f"{project}_{ts}_MDR.xlsx"
+
+    if not args.dry_run:
+        template_path = Path(args.template)
+        if not template_path.exists():
+            print(f"ERRORE: template non trovato: {template_path}", file=sys.stderr)
+            return 1
+
+        print("Step 8: compilazione template MDR...")
+        write_mdr_excel(
+            template_path,
+            mdr_path,
+            line_items,
+            project_code=project,
+            discipline_short_codes=discipline_short_codes,
+        )
+        print(f"  -> {mdr_path}")
+
+    elapsed_seconds = time.perf_counter() - pipeline_started_at
+    elapsed_label = format_elapsed_seconds(elapsed_seconds)
+    llm_usage = build_usage_summary()
     summary = PipelineSummary(
         project_name=project,
         scope_pdfs=[p.name for p in scope_pdfs],
@@ -321,10 +355,15 @@ def main() -> int:
         mdr_line_items=len(line_items),
         duration_populated_count=duration_populated,
         schedule_enabled=schedule_enabled,
+        elapsed_seconds=round(elapsed_seconds, 1),
+        llm_estimated_cost_usd=llm_usage.total_cost_usd,
+        llm_total_input_tokens=llm_usage.total_input_tokens,
+        llm_total_output_tokens=llm_usage.total_output_tokens,
+        llm_total_calls=llm_usage.total_calls,
     )
-    save_json(output_dir / "pipeline_summary.json", summary.to_dict())
+    save_json(json_dir / "pipeline_summary.json", summary.to_dict())
+    save_usage_audit(json_dir, llm_usage)
 
-    report_path = output_dir / f"{project}_{ts}_generation_report.xlsx"
     write_qa_report(
         report_path,
         raw_signals,
@@ -333,29 +372,15 @@ def main() -> int:
         line_items,
         summary,
         renco=renco_cmp,
+        llm_usage=llm_usage,
     )
     print(f"Step 7: report qualità -> {report_path}")
-
+    print(f"Tempo totale pipeline: {elapsed_label}")
+    print(format_usage_console(llm_usage))
     if args.dry_run:
         print("Dry-run: Excel MDR non generato.")
-        return 0
-
-    template_path = Path(args.template)
-    if not template_path.exists():
-        print(f"ERRORE: template non trovato: {template_path}", file=sys.stderr)
-        return 1
-
-    mdr_path = output_dir / f"{project}_{ts}_MDR.xlsx"
-    print("Step 8: compilazione template MDR...")
-    write_mdr_excel(
-        template_path,
-        mdr_path,
-        line_items,
-        project_code=project,
-        discipline_short_codes=discipline_short_codes,
-    )
-    print(f"  -> {mdr_path}")
-    print("Completato.")
+    else:
+        print("Completato.")
     return 0
 
 

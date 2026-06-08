@@ -19,7 +19,8 @@ from .models import (
     SelectedDocument,
     UncertainMapping,
 )
-from .utils import safe_excel_value
+from .llm_usage import LlmUsageSummary, format_cost_usd, format_token_count
+from .utils import format_elapsed_seconds, safe_excel_value
 
 GeneratedDoc = Union[MdrLineItem, SelectedDocument]
 
@@ -148,6 +149,7 @@ def write_qa_report(
     selected: List[GeneratedDoc],
     summary: PipelineSummary,
     renco: Optional[RencoComparison] = None,
+    llm_usage: Optional[LlmUsageSummary] = None,
 ) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
@@ -273,7 +275,42 @@ def write_qa_report(
             "In scope ma senza MATCH storico",
         ],
         ["Segnali scope esclusi", summary.uncertain_mapping_count, "Vedi foglio Esclusi"],
+        [
+            "Tempo esecuzione totale",
+            format_elapsed_seconds(summary.elapsed_seconds),
+            f"{summary.elapsed_seconds:.1f} s — durata end-to-end pipeline",
+        ],
+        [
+            "Stima costi LLM (totale)",
+            format_cost_usd(summary.llm_estimated_cost_usd),
+            (
+                f"{format_token_count(summary.llm_total_input_tokens)} input + "
+                f"{format_token_count(summary.llm_total_output_tokens)} output, "
+                f"{summary.llm_total_calls} chiamate — stima USD"
+            ),
+        ],
     ]
+    if llm_usage and llm_usage.lines:
+        for line in llm_usage.lines:
+            pipeline_rows.append(
+                [
+                    f"   — LLM {line.stage}",
+                    format_cost_usd(line.cost_usd),
+                    (
+                        f"{line.model} ({line.call_type}): {line.calls} chiamate, "
+                        f"{format_token_count(line.input_tokens)} in / "
+                        f"{format_token_count(line.output_tokens)} out"
+                    ),
+                ]
+            )
+    if llm_usage and llm_usage.pricing_note:
+        pipeline_rows.append(
+            [
+                "   — nota tariffe LLM",
+                "",
+                llm_usage.pricing_note,
+            ]
+        )
     row = _write_table(
         ws, row, ["Metrica", "Valore", "Nota"], pipeline_rows, [32, 14, 44]
     )

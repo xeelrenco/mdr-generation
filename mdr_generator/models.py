@@ -195,6 +195,11 @@ class PipelineSummary:
     mdr_line_items: int = 0
     duration_populated_count: int = 0
     schedule_enabled: bool = False
+    elapsed_seconds: float = 0.0
+    llm_estimated_cost_usd: float = 0.0
+    llm_total_input_tokens: int = 0
+    llm_total_output_tokens: int = 0
+    llm_total_calls: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
