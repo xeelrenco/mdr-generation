@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import copy
+from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -26,8 +27,10 @@ COL_PROG = 11  # K — progressive per coppia I+J
 COL_CATEGORY = 15
 COL_WBS = 21  # U
 COL_WORKFLOW = 27  # AA
+COL_PLANNED_FIRST_ISSUE = 29  # AC — PLANNED FIRST ISSUE (AD non compilata per ora)
 SHEET_NAME = "MDR"
 RENCO_PREFIX = "8360"
+DATE_NUMBER_FORMAT = "mm-dd-yy"
 
 
 def _copy_cell_style(src, dst) -> None:
@@ -101,6 +104,13 @@ def _line_workflow(doc: LineItemLike) -> str:
     return doc.category_workflow or ""
 
 
+def _write_date_cell(ws: Worksheet, row: int, column: int, value: Optional[date]) -> None:
+    if value is None:
+        return
+    cell = ws.cell(row=row, column=column, value=value)
+    cell.number_format = DATE_NUMBER_FORMAT
+
+
 def write_mdr_excel(
     template_path: Path,
     output_path: Path,
@@ -145,6 +155,8 @@ def write_mdr_excel(
         ws.cell(row=row, column=COL_WBS, value=safe_excel_value(_line_wbs(doc)))
         ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(_line_workflow(doc)))
         ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row))
+        if isinstance(doc, MdrLineItem):
+            _write_date_cell(ws, row, COL_PLANNED_FIRST_ISSUE, doc.planned_start)
 
     wb.properties.title = proj
     wb.save(output_path)

@@ -136,7 +136,7 @@ def main() -> int:
         print(f"LLM pass 2 (gap):   {pass2_provider} / {pass2_model}")
     else:
         print("LLM pass 2 (gap):   disabilitato")
-    print(f"Schedule (Fase 6):   {'attivo' if schedule_enabled else 'disabilitato'}")
+    print(f"Schedule (Step 5):   {'attivo' if schedule_enabled else 'disabilitato'}")
     print(f"Output Excel:      {output_dir}")
     print(f"Output JSON/audit: {json_dir}")
 
@@ -151,6 +151,7 @@ def main() -> int:
     scope_decisions = []
     dup_removed = 0
     duration_populated = 0
+    schedule_dated_rows = 0
     ranked = []
     normalized = []
     uncertain = []
@@ -283,8 +284,10 @@ def main() -> int:
                 json_dir,
                 enabled=True,
             )
+            schedule_dated_rows = sched_audit.get("scheduled_rows", 0)
             print(
-                f"  -> {sched_audit.get('scheduled_rows', 0)} righe con date pianificate"
+                f"  -> {schedule_dated_rows} righe con PLANNED FIRST ISSUE "
+                f"(inizio {sched_audit.get('project_start', '?')})"
             )
         else:
             save_json(
@@ -355,6 +358,7 @@ def main() -> int:
         mdr_line_items=len(line_items),
         duration_populated_count=duration_populated,
         schedule_enabled=schedule_enabled,
+        schedule_dated_rows=schedule_dated_rows,
         elapsed_seconds=round(elapsed_seconds, 1),
         llm_estimated_cost_usd=llm_usage.total_cost_usd,
         llm_total_input_tokens=llm_usage.total_input_tokens,

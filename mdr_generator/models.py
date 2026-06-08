@@ -195,6 +195,7 @@ class PipelineSummary:
     mdr_line_items: int = 0
     duration_populated_count: int = 0
     schedule_enabled: bool = False
+    schedule_dated_rows: int = 0
     elapsed_seconds: float = 0.0
     llm_estimated_cost_usd: float = 0.0
     llm_total_input_tokens: int = 0
