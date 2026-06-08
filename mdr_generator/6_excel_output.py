@@ -28,6 +28,9 @@ COL_CATEGORY = 15
 COL_WBS = 21  # U
 COL_WORKFLOW = 27  # AA
 COL_PLANNED_FIRST_ISSUE = 29  # AC — PLANNED FIRST ISSUE (AD non compilata per ora)
+FILTER_HEADER_ROW = 13
+FILTER_FIRST_COL = "A"
+FILTER_LAST_COL = "AI"  # col 35 — KBS INTERNAL CODE
 SHEET_NAME = "MDR"
 RENCO_PREFIX = "8360"
 DATE_NUMBER_FORMAT = "mm-dd-yy"
@@ -111,6 +114,15 @@ def _write_date_cell(ws: Worksheet, row: int, column: int, value: Optional[date]
     cell.number_format = DATE_NUMBER_FORMAT
 
 
+def _apply_mdr_auto_filter(ws: Worksheet, last_data_row: int) -> None:
+    """Filtri e ordinamento Excel sulla riga intestazione (A13:AI13 + dati)."""
+    if last_data_row < FILTER_HEADER_ROW:
+        last_data_row = FILTER_HEADER_ROW
+    ws.auto_filter.ref = (
+        f"{FILTER_FIRST_COL}{FILTER_HEADER_ROW}:{FILTER_LAST_COL}{last_data_row}"
+    )
+
+
 def write_mdr_excel(
     template_path: Path,
     output_path: Path,
@@ -157,6 +169,9 @@ def write_mdr_excel(
         ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row))
         if isinstance(doc, MdrLineItem):
             _write_date_cell(ws, row, COL_PLANNED_FIRST_ISSUE, doc.planned_start)
+
+    last_data_row = DATA_START_ROW + len(documents) - 1 if documents else FILTER_HEADER_ROW
+    _apply_mdr_auto_filter(ws, last_data_row)
 
     wb.properties.title = proj
     wb.save(output_path)
