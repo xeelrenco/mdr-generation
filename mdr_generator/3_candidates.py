@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Set
+from typing import Dict, List, Set, Tuple
 
 import duckdb
 import pandas as pd
@@ -27,7 +27,7 @@ def fetch_raci_candidates(
         rows = conn.execute(
             """
             SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
-                   CategoryCode, DisciplineWbs, CategoryWorkflow
+                   CategoryCode, DisciplineWbs, CategoryWorkflow, Scalable
             FROM my_db.mdr_reconciliation.v_DocumentsEnriched
             WHERE DisciplineCode = $1 AND ChapterName = $2
             ORDER BY Title
@@ -49,6 +49,7 @@ def fetch_raci_candidates(
                     category_code=r[5] or "",
                     discipline_wbs=r[6] or "",
                     category_workflow=r[7] or "",
+                    scalable=bool(r[8]),
                 )
             )
 
@@ -56,6 +57,18 @@ def fetch_raci_candidates(
         key=lambda c: (c.discipline_code, c.chapter_name, c.title.lower())
     )
     return all_candidates
+
+
+def candidates_by_pair(
+    candidates: List[RaciCandidate],
+) -> Dict[Tuple[str, str], List[RaciCandidate]]:
+    grouped: Dict[Tuple[str, str], List[RaciCandidate]] = {}
+    for c in candidates:
+        key = (c.discipline_code, c.chapter_name)
+        grouped.setdefault(key, []).append(c)
+    for key in grouped:
+        grouped[key].sort(key=lambda x: x.title.lower())
+    return grouped
 
 
 def save_candidates_csv(candidates: List[RaciCandidate], path: Path) -> None:

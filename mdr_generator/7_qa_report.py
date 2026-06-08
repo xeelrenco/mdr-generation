@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .models import (
+    MdrLineItem,
     NormalizedSignal,
     PipelineSummary,
     RencoComparison,
@@ -19,6 +20,8 @@ from .models import (
     UncertainMapping,
 )
 from .utils import safe_excel_value
+
+GeneratedDoc = Union[MdrLineItem, SelectedDocument]
 
 HEADER_FILL = PatternFill("solid", fgColor="2F5496")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -142,7 +145,7 @@ def write_qa_report(
     raw_signals: List[RawScopeSignal],
     normalized: List[NormalizedSignal],
     uncertain: List[UncertainMapping],
-    selected: List[SelectedDocument],
+    selected: List[GeneratedDoc],
     summary: PipelineSummary,
     renco: Optional[RencoComparison] = None,
 ) -> Path:
@@ -243,7 +246,22 @@ def write_qa_report(
             "Disciplina+capitolo presenti in catalogo",
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
-        ["4. Documenti in MDR finale", summary.selected_count, "Output Excel MDR"],
+        [
+            "3b. Decisioni document scope",
+            summary.document_scope_decisions,
+            "Pass LLM per coppia (in scope / istanze)",
+        ],
+        ["4. Righe MDR finali", summary.mdr_line_items or summary.selected_count, "Output Excel MDR"],
+        [
+            "   — durata timeline popolata",
+            summary.duration_populated_count,
+            "Giorni da timeline_reconciliation",
+        ],
+        [
+            "   — schedule attivo",
+            "Sì" if summary.schedule_enabled else "No",
+            "Ordine per predecessor RACI",
+        ],
         [
             "   — con storico MATCH",
             summary.with_history_count,
@@ -375,32 +393,61 @@ def write_qa_report(
 
     # --- Foglio 4: MDR_generato ---
     ws = wb.create_sheet("MDR_generato")
-    mdr_rows = [
-        [
-            s.discipline_code,
-            s.chapter_name,
-            s.title,
-            s.historical_count,
-            "Sì" if s.bucket == "with_history" else "No",
-            s.category_code,
-            s.type_code,
-        ]
-        for s in selected
-    ]
+    mdr_rows = []
+    for s in selected:
+        if isinstance(s, MdrLineItem):
+            mdr_rows.append(
+                [
+                    s.discipline_code,
+                    s.chapter_name,
+                    s.mdr_document_title,
+                    s.raci_title,
+                    s.raci_title_key,
+                    s.instance_count,
+                    "Sì" if s.scalable else "No",
+                    s.duration_days if s.duration_days is not None else "",
+                    s.historical_count,
+                    "Sì" if s.bucket == "with_history" else "No",
+                    s.category_code,
+                    s.type_code,
+                ]
+            )
+        else:
+            mdr_rows.append(
+                [
+                    s.discipline_code,
+                    s.chapter_name,
+                    s.title,
+                    s.title,
+                    s.title_key,
+                    1,
+                    "—",
+                    "",
+                    s.historical_count,
+                    "Sì" if s.bucket == "with_history" else "No",
+                    s.category_code,
+                    s.type_code,
+                ]
+            )
     _write_table(
         ws,
         1,
         [
             "Disciplina",
             "Capitolo",
+            "Titolo MDR",
             "Titolo RACI",
+            "TitleKey",
+            "Istanze",
+            "Scalable",
+            "Giorni (timeline)",
             "Occorrenze storico",
             "Storico MATCH",
             "Category",
             "Type",
         ],
         mdr_rows,
-        [10, 26, 44, 14, 14, 12, 10],
+        [10, 26, 44, 36, 14, 8, 10, 12, 14, 14, 12, 10],
     )
 
     # --- Foglio 5: Confronto_Renco ---

@@ -139,6 +139,28 @@ def _chunk_extracted_text_length(
     return len("".join(parts).strip())
 
 
+def extract_pdf_pages_text(
+    pdf_bytes: bytes,
+    pages: List[int],
+    *,
+    max_chars_per_page: int = 2500,
+) -> Dict[int, str]:
+    """Extract text for specific 1-based PDF pages."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    total = len(reader.pages)
+    result: Dict[int, str] = {}
+    for page in sorted({p for p in pages if isinstance(p, int) and p >= 1}):
+        if page > total:
+            continue
+        text = (reader.pages[page - 1].extract_text() or "").strip()
+        if not text:
+            continue
+        if len(text) > max_chars_per_page:
+            text = text[: max_chars_per_page - 1] + "…"
+        result[page] = text
+    return result
+
+
 def _vertex_credentials_path() -> Optional[str]:
     cred_path = cfg("VERTEX_CREDENTIALS_PATH")
     if not cred_path:
@@ -342,6 +364,96 @@ def _invoke_llm_pdf(
     return _call_openai_pdf(
         prompt, pdf_path, pdf_bytes, resolved, api_key, upload_name=upload_name
     )
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+def _call_openai_text(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    create_kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+    }
+    if _openai_supports_custom_temperature(model):
+        create_kwargs["temperature"] = 0.1
+    response = client.chat.completions.create(**create_kwargs)
+    return parse_json_response(response.choices[0].message.content or "{}")
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+def _call_gemini_text(prompt: str, model: str) -> Dict[str, Any]:
+    from google import genai
+    from google.genai import types
+
+    cred = _vertex_credentials_path()
+    if cred:
+        import os
+
+        os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", cred)
+
+    client = genai.Client(
+        vertexai=True,
+        project=cfg("VERTEX_PROJECT_ID"),
+        location=cfg("VERTEX_LOCATION", "europe-west1"),
+    )
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.1,
+            response_mime_type="application/json",
+        ),
+    )
+    return parse_json_response(getattr(response, "text", None) or "{}")
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+def _call_claude_text(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+    system = (
+        "You analyze engineering Scope of Work text. "
+        "Respond with valid JSON only: no markdown fences, no prose outside the JSON object."
+    )
+    max_output_tokens = max(4096, cfg_int("CLAUDE_MAX_TOKENS", 16384))
+    create_kwargs: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_output_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if _claude_supports_custom_temperature(model):
+        create_kwargs["temperature"] = 0.1
+    message = client.messages.create(**create_kwargs)
+    raw_text = _extract_anthropic_text(message)
+    return parse_json_response(raw_text)
+
+
+def _invoke_llm_text(
+    prompt: str,
+    provider: str,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    provider = (provider or "openai").lower()
+    if provider == "gemini":
+        resolved = model or cfg("GEMINI_MODEL", "gemini-2.0-flash")
+        return _call_gemini_text(prompt, resolved)
+    if provider == "claude":
+        api_key = cfg("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY richiesta per provider LLM claude")
+        resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+        return _call_claude_text(prompt, resolved, api_key)
+    if provider != "openai":
+        raise RuntimeError(f"Provider LLM scope non supportato: {provider}")
+    api_key = cfg("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY richiesta per provider LLM openai")
+    resolved = model or cfg("OPENAI_MODEL", "gpt-4o")
+    return _call_openai_text(prompt, resolved, api_key)
 
 
 def _extract_scope_single_call(
@@ -635,3 +747,12 @@ def call_scope_llm_pdf(
     return _invoke_llm_pdf(
         prompt, pdf_path, pdf_bytes, provider, model=resolved_model, upload_name=upload_name
     )
+
+
+def call_scope_llm_text(
+    prompt: str,
+    model: Optional[str] = None,
+    pass_id: str = "pass1",
+) -> Dict[str, Any]:
+    provider, resolved_model = resolve_scope_llm_config(pass_id, cli_model=model)
+    return _invoke_llm_text(prompt, provider, model=resolved_model)

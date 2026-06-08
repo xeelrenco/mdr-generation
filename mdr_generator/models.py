@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 
@@ -72,6 +73,7 @@ class RaciCandidate:
     category_code: str
     discipline_wbs: str
     category_workflow: str
+    scalable: bool = False
     historical_count: int = 0
     avg_confidence: Optional[float] = None
     judge_hits: int = 0
@@ -80,6 +82,73 @@ class RaciCandidate:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class DocumentInstanceSpec:
+    index: int
+    label: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class DocumentScopeDecision:
+    title_key: str
+    raci_title: str
+    discipline_code: str
+    chapter_name: str
+    scalable: bool
+    in_scope: bool
+    instance_count: int = 1
+    instances: List[DocumentInstanceSpec] = field(default_factory=list)
+    evidence_quote: str = ""
+    source_pages: List[int] = field(default_factory=list)
+    source_pdf: str = ""
+    decision_source: str = "llm"  # llm | rule_fallback
+    selection_reason: str = ""
+    qa_flags: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["instances"] = [i.to_dict() for i in self.instances]
+        return d
+
+
+@dataclass
+class MdrLineItem:
+    raci_title_key: str
+    raci_title: str
+    mdr_document_title: str
+    discipline_code: str
+    chapter_name: str
+    type_code: str
+    category_code: str
+    discipline_wbs: str
+    category_workflow: str
+    scalable: bool
+    instance_index: Optional[int] = None
+    instance_label: str = ""
+    instance_count: int = 1
+    historical_count: int = 0
+    avg_confidence: Optional[float] = None
+    duration_days: Optional[int] = None
+    duration_source: str = "empty"
+    planned_start: Optional[date] = None
+    planned_finish: Optional[date] = None
+    schedule_sort_key: Optional[int] = None
+    selection_reason: str = ""
+    bucket: str = "without_history"
+    decision_source: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        if self.planned_start:
+            d["planned_start"] = self.planned_start.isoformat()
+        if self.planned_finish:
+            d["planned_finish"] = self.planned_finish.isoformat()
+        return d
 
 
 @dataclass
@@ -122,6 +191,10 @@ class PipelineSummary:
     scope_pass2_model: str = ""
     scope_pass2_pairs_targeted: int = 0
     scope_pass2_pairs_recovered: int = 0
+    document_scope_decisions: int = 0
+    mdr_line_items: int = 0
+    duration_populated_count: int = 0
+    schedule_enabled: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import duckdb
 
@@ -234,6 +234,92 @@ def build_scope_pdf_chunk_repass_prompt(
         f"- Prefer strong/medium confidence only when the SoW text clearly supports the pair; "
         f"do not guess generic pairs (LIST, OPERATING MANUAL, SCADA) without explicit evidence.\n"
         f"- If this excerpt truly contains no documentation scope, return {{\"signals\": []}}.\n"
+    )
+
+
+def build_scalable_instance_prompt(
+    discipline_code: str,
+    chapter_name: str,
+    candidates: List[Any],
+    sow_context: str,
+    historical_examples: Optional[Dict[str, List[str]]] = None,
+    *,
+    part_index: Optional[int] = None,
+    part_total: Optional[int] = None,
+) -> str:
+    """Prompt for 3b: instance counts for Scalable RACI documents only."""
+    lines: List[str] = []
+    for c in candidates:
+        examples = (historical_examples or {}).get(c.title_key) or []
+        hint = ""
+        if examples:
+            hint = f"  (historical MDR title examples: {examples[0][:80]})"
+        lines.append(f"- {c.title_key} | {c.title}{hint}")
+
+    catalog_block = "\n".join(lines)
+    multi_part = part_total is not None and part_total > 1
+    part_note = ""
+    count_rule = "- Derive instance_count from SoW quantities; if unclear use 1."
+    count_field = "- instance_count: integer >= 1"
+
+    if multi_part:
+        part_note = f"""
+IMPORTANT: This is SoW context PART {part_index} of {part_total} for the same RACI pair.
+Count instances evident ONLY in this part. Use instance_count=0 if a document is not
+mentioned or not quantified in this part.
+"""
+        count_rule = (
+            "- Derive instance_count ONLY from quantities in THIS part; "
+            "use 0 if not mentioned or not quantified here."
+        )
+        count_field = "- instance_count: integer >= 0 (0 = not quantified in this part)"
+
+    return f"""You analyze Scope of Work (SoW) excerpts for an EPC/engineering project.
+
+The RACI pair {discipline_code} | {chapter_name} is already confirmed in project scope.
+All catalog documents below are required. Your task is ONLY to estimate how many
+instances each Scalable document needs (supports, units, areas, buildings, etc.).
+{part_note}
+SOW CONTEXT (grouped excerpts for this pair):
+{sow_context}
+
+SCALABLE CATALOG DOCUMENTS (TitleKey | Title):
+{catalog_block}
+
+For EACH catalog document above, output one object:
+- title_key: exact TitleKey from the list
+{count_field}
+- instances: list of {{index, label}} when instance_count > 1
+  - index: 1..instance_count
+  - label: optional meaningful text from SoW (area, equipment tag, building); empty if none
+- evidence_quote: short quote supporting the count (max 250 chars); empty if instance_count=0
+- source_pages: 1-based PDF page numbers from the context above
+
+RULES:
+- Use ONLY title_key values from the catalog list.
+{count_rule}
+- Do not output documents not in the catalog list.
+- label must not be generic like "NUM 2" only — leave empty if no meaningful suffix.
+
+Respond with JSON only:
+{{"documents": [...]}}
+"""
+
+
+def build_document_scope_prompt(
+    discipline_code: str,
+    chapter_name: str,
+    candidates: List[Any],
+    historical_examples: Optional[Dict[str, List[str]]] = None,
+    sow_context: str = "",
+) -> str:
+    """Backward-compatible alias; prefer build_scalable_instance_prompt."""
+    return build_scalable_instance_prompt(
+        discipline_code,
+        chapter_name,
+        candidates,
+        sow_context or "(no SoW context)",
+        historical_examples=historical_examples,
     )
 
 

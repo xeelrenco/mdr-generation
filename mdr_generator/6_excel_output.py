@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from copy import copy
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .models import SelectedDocument
+from .models import MdrLineItem, SelectedDocument
 from .utils import safe_excel_value
+
+LineItemLike = Union[MdrLineItem, SelectedDocument]
 
 DATA_START_ROW = 14
 HEADER_LAST_ROW = 13
@@ -73,10 +75,36 @@ def _reneco_code_formula(row: int) -> str:
     return f'="{RENCO_PREFIX}-"&H{row}&"-"&I{row}&J{row}&"-"&K{row}'
 
 
+def _line_title(doc: LineItemLike) -> str:
+    if isinstance(doc, MdrLineItem):
+        return doc.mdr_document_title
+    return doc.title
+
+
+def _line_discipline(doc: LineItemLike) -> str:
+    return doc.discipline_code
+
+
+def _line_type(doc: LineItemLike) -> str:
+    return doc.type_code or ""
+
+
+def _line_category(doc: LineItemLike) -> str:
+    return doc.category_code or ""
+
+
+def _line_wbs(doc: LineItemLike) -> str:
+    return doc.discipline_wbs or ""
+
+
+def _line_workflow(doc: LineItemLike) -> str:
+    return doc.category_workflow or ""
+
+
 def write_mdr_excel(
     template_path: Path,
     output_path: Path,
-    documents: List[SelectedDocument],
+    documents: List[LineItemLike],
     project_code: Optional[str] = None,
     discipline_short_codes: Optional[Dict[str, str]] = None,
 ) -> Path:
@@ -100,22 +128,22 @@ def write_mdr_excel(
 
     for idx, doc in enumerate(documents):
         row = DATA_START_ROW + idx
-        disc_value = doc.discipline_code
+        disc_value = _line_discipline(doc)
         if discipline_short_codes:
             disc_value = discipline_short_codes.get(disc_value, disc_value)
-        type_value = safe_excel_value(doc.type_code)
+        type_value = safe_excel_value(_line_type(doc))
         pair_key = (str(disc_value or ""), str(type_value or ""))
         pair_progress[pair_key] = pair_progress.get(pair_key, 0) + 1
         prog_value = f"{pair_progress[pair_key]:06d}"
 
         ws.cell(row=row, column=COL_ITEM, value=idx + 1)
-        ws.cell(row=row, column=COL_DESCRIPTION, value=safe_excel_value(doc.title))
+        ws.cell(row=row, column=COL_DESCRIPTION, value=safe_excel_value(_line_title(doc)))
         ws.cell(row=row, column=COL_DISC, value=safe_excel_value(disc_value))
         ws.cell(row=row, column=COL_TYPE, value=type_value)
         ws.cell(row=row, column=COL_PROG, value=prog_value)
-        ws.cell(row=row, column=COL_CATEGORY, value=safe_excel_value(doc.category_code))
-        ws.cell(row=row, column=COL_WBS, value=safe_excel_value(doc.discipline_wbs))
-        ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(doc.category_workflow))
+        ws.cell(row=row, column=COL_CATEGORY, value=safe_excel_value(_line_category(doc)))
+        ws.cell(row=row, column=COL_WBS, value=safe_excel_value(_line_wbs(doc)))
+        ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(_line_workflow(doc)))
         ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row))
 
     wb.properties.title = proj

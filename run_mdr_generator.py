@@ -3,6 +3,7 @@
 MDR Generator v1 — Scope PDF to Master Document Register.
 
 Step 1: ogni PDF in input/SoW/ viene inviato all'LLM che estrae discipline/chapter RACI.
+Step 3b+: istanze Scalable, durata timeline, schedule opzionale.
 
 Usage:
   python run_mdr_generator.py --project-name "7350"
@@ -21,8 +22,11 @@ from pathlib import Path
 from mdr_generator.config import PROJECT_DIR, cfg, cfg_bool
 from mdr_generator.db import (
     connect_motherduck,
-    fetch_documents_enriched_keys,
     load_discipline_short_codes,
+)
+from mdr_generator.document_effort_profile import (
+    load_document_effort_profiles,
+    save_document_effort_profiles,
 )
 from mdr_generator.raci_vocabulary import load_raci_vocabulary
 from mdr_generator.models import PipelineSummary
@@ -30,19 +34,25 @@ from mdr_generator.scope_pdf import resolve_scope_llm_config
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import save_json
 
-# Step modules use numeric prefixes (1_, 2_, …); import via importlib because
-# `from mdr_generator.1_foo` is invalid Python syntax.
 _im = importlib.import_module
 fetch_raci_candidates = _im("mdr_generator.3_candidates").fetch_raci_candidates
 save_candidates_csv = _im("mdr_generator.3_candidates").save_candidates_csv
 apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ranking
+apply_timeline_duration = _im("mdr_generator.4_timeline_duration").apply_timeline_duration
+load_timeline_duration_map = _im(
+    "mdr_generator.4_timeline_duration"
+).load_timeline_duration_map
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
 recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
 run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_pass
 write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
-select_documents = _im("mdr_generator.5_selection").select_documents
+run_document_scope_pass = _im("mdr_generator.3b_document_scope").run_document_scope_pass
+expand_scope_to_line_items = _im(
+    "mdr_generator.3c_instance_expansion"
+).expand_scope_to_line_items
+schedule_line_items = _im("mdr_generator.5_schedule").schedule_line_items
 write_mdr_excel = _im("mdr_generator.6_excel_output").write_mdr_excel
 
 
@@ -79,6 +89,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disabilita pass 2 gap mirato anche se SCOPE_PASS2_ENABLED=true",
     )
+    p.add_argument(
+        "--no-schedule",
+        action="store_true",
+        help="Salta scheduling predecessor (Fase 6)",
+    )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -104,11 +119,14 @@ def main() -> int:
     pass2_provider, pass2_model = resolve_scope_llm_config(
         "pass2", cli_model=args.scope_pass2_llm_model
     )
+    schedule_enabled = cfg_bool("SCHEDULE_ENABLED", default=False) and not args.no_schedule
+
     print(f"LLM pass 1 (scope): {pass1_provider} / {pass1_model}")
     if pass2_enabled:
         print(f"LLM pass 2 (gap):   {pass2_provider} / {pass2_model}")
     else:
         print("LLM pass 2 (gap):   disabilitato")
+    print(f"Schedule (Fase 6):   {'attivo' if schedule_enabled else 'disabilitato'}")
 
     raw_json = output_dir / "scope_raw_signals.json"
     norm_json = output_dir / "scope_normalized_signals.json"
@@ -117,6 +135,15 @@ def main() -> int:
     renco_cmp = None
     gap_pass_audit: dict = {"enabled": False}
     discipline_short_codes: dict[str, str] = {}
+    line_items = []
+    scope_decisions = []
+    dup_removed = 0
+    duration_populated = 0
+    ranked = []
+    normalized = []
+    uncertain = []
+    raw_signals = []
+
     conn = connect_motherduck()
     try:
         chunk_on = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
@@ -181,10 +208,20 @@ def main() -> int:
         else:
             save_json(
                 output_dir / "scope_gap_pass_audit.json",
-                {"enabled": False, "reason": "SCOPE_PASS2_ENABLED=false or --no-scope-pass2"},
+                {
+                    "enabled": False,
+                    "reason": "SCOPE_PASS2_ENABLED=false or --no-scope-pass2",
+                },
             )
 
         save_normalized(normalized, uncertain, norm_json)
+
+        print("Step 3a: profili documento (Scalable, timeline, esempi storici)...")
+        profiles = load_document_effort_profiles(conn)
+        save_document_effort_profiles(
+            profiles, output_dir / "document_effort_profiles.json"
+        )
+        print(f"  -> {len(profiles)} profili TitleKey")
 
         print("Step 3: candidati RACI da v_DocumentsEnriched...")
         candidates = fetch_raci_candidates(conn, normalized)
@@ -196,17 +233,57 @@ def main() -> int:
         with_hist = sum(1 for c in ranked if c.historical_count > 0)
         print(f"  -> {with_hist} con storico, {len(ranked) - with_hist} senza")
 
-        valid_keys = fetch_documents_enriched_keys(conn)
         discipline_short_codes = load_discipline_short_codes(conn)
 
-        print("Step 5: selezione finale...")
-        selected, dup_removed = select_documents(ranked, valid_keys)
-        print(f"  -> {len(selected)} documenti selezionati")
+        print("Step 3b: istanze Scalable (LLM su estratti SoW raggruppati per coppia)...")
+        scope_decisions, _scope_audit = run_document_scope_pass(
+            scope_pdfs,
+            raw_signals,
+            normalized,
+            ranked,
+            profiles,
+            output_dir,
+            model=args.scope_llm_model,
+        )
+        in_scope = [d for d in scope_decisions if d.in_scope]
+        scalable_in_scope = sum(1 for d in in_scope if d.scalable)
+        print(
+            f"  -> {len(in_scope)} decisioni in scope "
+            f"({scalable_in_scope} Scalable, {len(in_scope) - scalable_in_scope} auto count=1)"
+        )
+
+        print("Step 3c: espansione istanze MDR...")
+        line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
+        print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
+
+        print("Step 4b: durata da timeline_reconciliation...")
+        duration_map = load_timeline_duration_map(conn)
+        duration_populated = apply_timeline_duration(line_items, duration_map)
+        print(
+            f"  -> {duration_populated}/{len(line_items)} righe con durata timeline"
+        )
+
+        if schedule_enabled:
+            print("Step 5: scheduling e ordine per predecessor RACI...")
+            line_items, sched_audit = schedule_line_items(
+                conn,
+                line_items,
+                output_dir,
+                enabled=True,
+            )
+            print(
+                f"  -> {sched_audit.get('scheduled_rows', 0)} righe con date pianificate"
+            )
+        else:
+            save_json(
+                output_dir / "schedule_audit.json",
+                {"enabled": False, "reason": "SCHEDULE_ENABLED=false or --no-schedule"},
+            )
 
         print("Step 6: confronto con storico MDR progetto (MotherDuck)...")
         from mdr_generator.renco_compare import build_renco_comparison
 
-        renco_cmp = build_renco_comparison(conn, project, normalized, selected)
+        renco_cmp = build_renco_comparison(conn, project, normalized, line_items)
         print(
             f"  -> overlap RACI: {renco_cmp.overlap_count}"
             f" | solo generato: {renco_cmp.only_generated_count}"
@@ -215,6 +292,7 @@ def main() -> int:
     finally:
         conn.close()
 
+    distinct_keys = len({i.raci_title_key for i in line_items})
     summary = PipelineSummary(
         project_name=project,
         scope_pdfs=[p.name for p in scope_pdfs],
@@ -227,10 +305,10 @@ def main() -> int:
         raw_signal_count=len(raw_signals),
         normalized_signal_count=len(normalized),
         candidate_count=len(ranked),
-        selected_count=len(selected),
-        with_history_count=sum(1 for s in selected if s.bucket == "with_history"),
+        selected_count=distinct_keys,
+        with_history_count=sum(1 for s in line_items if s.bucket == "with_history"),
         without_history_count=sum(
-            1 for s in selected if s.bucket == "without_history"
+            1 for s in line_items if s.bucket == "without_history"
         ),
         duplicates_removed=dup_removed,
         uncertain_mapping_count=len(uncertain),
@@ -239,6 +317,10 @@ def main() -> int:
         scope_pass2_model=pass2_model if pass2_enabled else "",
         scope_pass2_pairs_targeted=gap_pass_audit.get("missing_before_pass2", 0),
         scope_pass2_pairs_recovered=gap_pass_audit.get("recovered_count", 0),
+        document_scope_decisions=len(scope_decisions),
+        mdr_line_items=len(line_items),
+        duration_populated_count=duration_populated,
+        schedule_enabled=schedule_enabled,
     )
     save_json(output_dir / "pipeline_summary.json", summary.to_dict())
 
@@ -248,7 +330,7 @@ def main() -> int:
         raw_signals,
         normalized,
         uncertain,
-        selected,
+        line_items,
         summary,
         renco=renco_cmp,
     )
@@ -268,7 +350,7 @@ def main() -> int:
     write_mdr_excel(
         template_path,
         mdr_path,
-        selected,
+        line_items,
         project_code=project,
         discipline_short_codes=discipline_short_codes,
     )

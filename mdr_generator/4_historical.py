@@ -65,6 +65,7 @@ def apply_historical_ranking(
                 category_code=c.category_code,
                 discipline_wbs=c.discipline_wbs,
                 category_workflow=c.category_workflow,
+                scalable=c.scalable,
                 historical_count=h.get("historical_count", 0),
                 avg_confidence=h.get("avg_confidence"),
                 judge_hits=h.get("judge_hits", 0),
