@@ -27,7 +27,7 @@ COL_TYPE = 10
 COL_PROG = 11  # K — progressive per coppia I+J
 COL_CATEGORY = 15
 COL_WBS = 21  # U
-COL_MANHOURS = 24  # X — durata timeline (giorni) da cronoprogramma riconciliato
+COL_MANHOURS = 24  # X — ore/uomo = giorni timeline × 8
 COL_WORKFLOW = 27  # AA
 COL_PLANNED_FIRST_ISSUE = 29  # AC — PLANNED FIRST ISSUE (AD non compilata per ora)
 FILTER_HEADER_ROW = 13
@@ -187,8 +187,8 @@ def write_mdr_excel(
         ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(_line_workflow(doc)))
         ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row))
         if isinstance(doc, MdrLineItem):
-            if doc.duration_days is not None and doc.duration_days >= 0:
-                ws.cell(row=row, column=COL_MANHOURS, value=doc.duration_days)
+            if doc.manhours is not None and doc.manhours >= 0:
+                ws.cell(row=row, column=COL_MANHOURS, value=doc.manhours)
             _write_date_cell(ws, row, COL_PLANNED_FIRST_ISSUE, doc.planned_start)
 
     last_data_row = DATA_START_ROW + len(documents) - 1 if documents else FILTER_HEADER_ROW

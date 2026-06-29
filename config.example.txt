@@ -43,3 +43,10 @@ GEMINI_MODEL=gemini-2.5-flash
 # Codice progetto per confronto QA Step 6 vs storico MDR (MotherDuck).
 # Non influenza Pass 2 (usa catalogo RACI) né il nome file output (--project-name).
 PROJECT_CODE=7350
+
+# --- Schedule predecessor (Step 5: ordine + date MDR) ---
+SCHEDULE_ENABLED=true
+PROJECT_START_DATE=
+
+# --- Parallelizzazione chiamate LLM (I/O-bound; default 8) ---
+LLM_PARALLEL_WORKERS=8

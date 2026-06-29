@@ -50,6 +50,10 @@ apply_timeline_duration = _im("mdr_generator.4_timeline_duration").apply_timelin
 load_timeline_duration_map = _im(
     "mdr_generator.4_timeline_duration"
 ).load_timeline_duration_map
+apply_manhours_from_duration = _im(
+    "mdr_generator.4_manhours"
+).apply_manhours_from_duration
+HOURS_PER_DURATION_DAY = _im("mdr_generator.4_manhours").HOURS_PER_DURATION_DAY
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
 recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
@@ -157,6 +161,7 @@ def main() -> int:
     scope_decisions = []
     dup_removed = 0
     duration_populated = 0
+    manhours_populated = 0
     schedule_dated_rows = 0
     ranked = []
     normalized = []
@@ -277,12 +282,28 @@ def main() -> int:
         line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
 
-        print("Step 4b: durata da timeline_reconciliation...")
+        print("Step 4b: durata da timeline_reconciliation (scheduling)...")
         duration_map = load_timeline_duration_map(conn)
         duration_populated = apply_timeline_duration(line_items, duration_map)
         print(
-            f"  -> {duration_populated}/{len(line_items)} righe con durata timeline "
-            f"(anche colonna X quando disponibile)"
+            f"  -> {duration_populated}/{len(line_items)} righe con durata timeline (giorni)"
+        )
+
+        print(
+            f"Step 4c: MANHOURS (col. X) = giorni timeline × {HOURS_PER_DURATION_DAY} h/giorno..."
+        )
+        manhours_populated, mh_audit = apply_manhours_from_duration(line_items)
+        save_json(
+            json_dir / "manhours_audit.json",
+            {
+                "hours_per_duration_day": HOURS_PER_DURATION_DAY,
+                "formula": "manhours = round(duration_days * hours_per_duration_day)",
+                **mh_audit,
+            },
+        )
+        print(
+            f"  -> {manhours_populated}/{len(line_items)} righe con MANHOURS "
+            f"({len(line_items) - manhours_populated} senza durata timeline)"
         )
 
         if schedule_enabled:
@@ -371,6 +392,7 @@ def main() -> int:
         document_scope_decisions=len(scope_decisions),
         mdr_line_items=len(line_items),
         duration_populated_count=duration_populated,
+        manhours_populated_count=manhours_populated,
         schedule_enabled=schedule_enabled,
         schedule_dated_rows=schedule_dated_rows,
         elapsed_seconds=round(elapsed_seconds, 1),

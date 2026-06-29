@@ -135,6 +135,8 @@ class MdrLineItem:
     avg_confidence: Optional[float] = None
     duration_days: Optional[int] = None
     duration_source: str = "empty"
+    manhours: Optional[int] = None
+    manhours_source: str = "empty"
     planned_start: Optional[date] = None
     planned_finish: Optional[date] = None
     schedule_sort_key: Optional[int] = None
@@ -194,6 +196,7 @@ class PipelineSummary:
     document_scope_decisions: int = 0
     mdr_line_items: int = 0
     duration_populated_count: int = 0
+    manhours_populated_count: int = 0
     schedule_enabled: bool = False
     schedule_dated_rows: int = 0
     elapsed_seconds: float = 0.0

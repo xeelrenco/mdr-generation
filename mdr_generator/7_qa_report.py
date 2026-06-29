@@ -262,7 +262,12 @@ def write_qa_report(
         [
             "   — durata timeline popolata",
             summary.duration_populated_count,
-            "Giorni (FinishActualized − StartActualized) da v_TimelineTaskToMdrLinks_Dates; anche col. X",
+            "Giorni calendario (Finish−Start) da v_TimelineTaskToMdrLinks_Dates; usata per Step 5 schedule",
+        ],
+        [
+            "   — MANHOURS popolati",
+            summary.manhours_populated_count,
+            "Colonna X: round(giorni timeline × 8); vuoto se manca durata timeline",
         ],
         [
             "   — schedule attivo",
@@ -465,6 +470,7 @@ def write_qa_report(
                     s.instance_count,
                     "Sì" if s.scalable else "No",
                     s.duration_days if s.duration_days is not None else "",
+                    s.manhours if s.manhours is not None else "",
                     s.planned_start.isoformat() if s.planned_start else "",
                     s.historical_count,
                     "Sì" if s.bucket == "with_history" else "No",
@@ -502,6 +508,7 @@ def write_qa_report(
             "Istanze",
             "Scalable",
             "Giorni (timeline)",
+            "MANHOURS",
             "Planned First Issue",
             "Occorrenze storico",
             "Storico MATCH",
@@ -509,7 +516,7 @@ def write_qa_report(
             "Type",
         ],
         mdr_rows,
-        [10, 26, 44, 36, 14, 8, 10, 12, 14, 14, 12, 10],
+        [10, 26, 44, 36, 14, 8, 10, 12, 12, 14, 14, 12, 10],
     )
 
     # --- Foglio 5: Confronto_Renco ---
