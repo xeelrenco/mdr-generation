@@ -225,7 +225,7 @@ def write_qa_report(
         [
             "Pass 2 gap mirato",
             "Sì" if summary.scope_pass2_enabled else "No",
-            "Second pass su coppie Renco non trovate",
+            "Second pass su coppie catalogo RACI non estratte al pass 1",
         ],
         [
             "Provider / modello pass 2",
@@ -239,7 +239,7 @@ def write_qa_report(
         [
             "Coppie target pass 2",
             summary.scope_pass2_pairs_targeted if summary.scope_pass2_enabled else "—",
-            "Coppie Renco mancanti dopo pass 1",
+            "Coppie catalogo RACI non ancora in scope dopo pass 1",
         ],
         [
             "Coppie recuperate pass 2",

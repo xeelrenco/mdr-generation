@@ -182,8 +182,8 @@ def build_gap_targeted_pass_prompt(
     return f"""You analyze a Scope of Work (SoW) PDF excerpt for an EPC/engineering project.
 
 CONTEXT: A first scope extraction pass on this SoW already reported some discipline+chapter
-documentation pairs. The pairs below were NOT identified in that first pass but are still
-plausible candidates for this type of project. Re-read THIS EXCERPT ONLY and confirm any
+documentation pairs from the official RACI catalog. The pairs below were NOT identified in
+that first pass but remain valid catalog chapters. Re-read THIS EXCERPT ONLY and confirm any
 pair that is explicitly supported by the SoW text as in-scope for engineering documentation.
 
 CANDIDATE PAIRS (not yet reported in pass 1) — output a signal ONLY for pairs you find

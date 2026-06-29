@@ -80,7 +80,11 @@ def _parse_args() -> argparse.Namespace:
             PROJECT_DIR / "input" / "Master Document Register Template.xlsx"
         ),
     )
-    p.add_argument("--project-name", default=cfg("PROJECT_CODE", "project"))
+    p.add_argument(
+        "--project-name",
+        default=cfg("PROJECT_CODE", "project"),
+        help="Prefisso nome file Excel/JSON output (default: PROJECT_CODE)",
+    )
     p.add_argument("--output-dir", default=str(PROJECT_DIR / "output"))
     p.add_argument(
         "--scope-llm-model",
@@ -208,11 +212,13 @@ def main() -> int:
         )
 
         if pass2_enabled:
-            print("Step 2c: second pass mirato su coppie Renco mancanti...")
+            print(
+                "Step 2c: second pass mirato su coppie catalogo RACI "
+                "non ancora estratte..."
+            )
             gap_recovered, gap_pass_audit = run_gap_targeted_pass(
                 scope_pdfs,
                 conn,
-                project,
                 vocab,
                 existing_pairs,
                 model=args.scope_pass2_llm_model,
@@ -298,10 +304,15 @@ def main() -> int:
                 {"enabled": False, "reason": "SCHEDULE_ENABLED=false or --no-schedule"},
             )
 
-        print("Step 6: confronto con storico MDR progetto (MotherDuck)...")
+        qa_project = cfg("PROJECT_CODE", project)
+        print(
+            f"Step 6: confronto QA vs storico MDR progetto {qa_project} (MotherDuck)..."
+        )
         from mdr_generator.renco_compare import build_renco_comparison
 
-        renco_cmp = build_renco_comparison(conn, project, normalized, line_items)
+        renco_cmp = build_renco_comparison(
+            conn, qa_project, normalized, line_items
+        )
         print(
             f"  -> overlap RACI: {renco_cmp.overlap_count}"
             f" | solo generato: {renco_cmp.only_generated_count}"
