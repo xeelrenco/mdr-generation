@@ -1,4 +1,4 @@
-"""Step 2c: second pass LLM su coppie scope candidate non ancora estratte al pass 1."""
+"""Step 2c: second pass LLM on RACI catalog pairs not yet found in pass 1."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from .config import cfg_bool, cfg_int
 from .models import NormalizedSignal
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import RaciVocabulary, build_gap_targeted_pass_prompt
-from .renco_compare import fetch_renco_scope_pairs
 from .scope_pdf import (
     call_scope_llm_pdf,
     chunk_page_ranges,
@@ -125,7 +124,6 @@ def _run_gap_chunk_job(
 def run_gap_targeted_pass(
     scope_pdfs: List[Path],
     conn: duckdb.DuckDBPyConnection,
-    project_code: str,
     vocab: RaciVocabulary,
     existing_pairs: Set[Tuple[str, str]],
     model: Optional[str] = None,
@@ -136,8 +134,8 @@ def run_gap_targeted_pass(
     pass2_provider, pass2_model = resolve_scope_llm_config(
         "pass2", cli_model=model
     )
-    renco_pairs = fetch_renco_scope_pairs(conn, project_code)
-    missing = sorted(renco_pairs - existing_pairs)
+    catalog_pairs = set(vocab.canonical_pairs)
+    missing = sorted(catalog_pairs - existing_pairs)
     max_pairs = max(0, cfg_int("SCOPE_PASS2_MAX_PAIRS", 60))
     if max_pairs and len(missing) > max_pairs:
         missing = missing[:max_pairs]
@@ -147,14 +145,15 @@ def run_gap_targeted_pass(
         "provider": pass2_provider,
         "model": pass2_model,
         "llm_parallel_workers": llm_parallel_workers(),
-        "renco_pairs_total": len(renco_pairs),
+        "pair_source": "mdr_reconciliation.v_DocumentsEnriched",
+        "catalog_pairs_total": len(catalog_pairs),
         "missing_before_pass2": len(missing),
         "max_pairs_limit": max_pairs,
         "runs": [],
     }
 
     if not missing:
-        print("  Step 2c: nessuna coppia candidata — pass 2 saltato")
+        print("  Step 2c: nessuna coppia catalogo da cercare — pass 2 saltato")
         audit["recovered_count"] = 0
         return [], audit
 
@@ -164,7 +163,7 @@ def run_gap_targeted_pass(
     chunk_enabled, chunk_pages, overlap = _pass2_chunk_settings()
 
     print(
-        f"  Step 2c: gap pass — {len(pending)} coppie target"
+        f"  Step 2c: gap pass catalogo RACI — {len(pending)} coppie target"
         f" ({pass2_provider}/{pass2_model})"
     )
 

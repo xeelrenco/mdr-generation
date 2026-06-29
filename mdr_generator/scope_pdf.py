@@ -129,6 +129,39 @@ def _parse_llm_signals(
     return out
 
 
+def _pypdf_page_text(page: Any) -> Optional[str]:
+    """Return page text, or None if pypdf cannot decode fonts on this page."""
+    try:
+        return page.extract_text() or ""
+    except LookupError:
+        return None
+
+
+def _fitz_page_texts(pdf_bytes: bytes, pages: List[int]) -> Dict[int, str]:
+    try:
+        import fitz
+    except ImportError:
+        return {}
+    wanted = sorted({p for p in pages if isinstance(p, int) and p >= 1})
+    if not wanted:
+        return {}
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            result: Dict[int, str] = {}
+            for page in wanted:
+                if page > len(doc):
+                    continue
+                text = (doc[page - 1].get_text("text") or "").strip()
+                if text:
+                    result[page] = text
+            return result
+        finally:
+            doc.close()
+    except Exception:
+        return {}
+
+
 def _chunk_extracted_text_length(
     pdf_bytes: bytes,
     page_start: int,
@@ -136,9 +169,17 @@ def _chunk_extracted_text_length(
 ) -> int:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     parts: List[str] = []
+    needs_fitz: List[int] = []
     for page_idx in range(page_start - 1, min(page_end, len(reader.pages))):
-        text = reader.pages[page_idx].extract_text() or ""
+        text = _pypdf_page_text(reader.pages[page_idx])
+        if text is None:
+            needs_fitz.append(page_idx + 1)
+            continue
         parts.append(text)
+    if needs_fitz:
+        fitz_texts = _fitz_page_texts(pdf_bytes, needs_fitz)
+        for page in needs_fitz:
+            parts.append(fitz_texts.get(page, ""))
     return len("".join(parts).strip())
 
 
@@ -152,15 +193,26 @@ def extract_pdf_pages_text(
     reader = PdfReader(io.BytesIO(pdf_bytes))
     total = len(reader.pages)
     result: Dict[int, str] = {}
+    missing: List[int] = []
     for page in sorted({p for p in pages if isinstance(p, int) and p >= 1}):
         if page > total:
             continue
-        text = (reader.pages[page - 1].extract_text() or "").strip()
+        text = _pypdf_page_text(reader.pages[page - 1])
+        if text is None:
+            missing.append(page)
+            continue
+        text = text.strip()
         if not text:
+            missing.append(page)
             continue
         if len(text) > max_chars_per_page:
             text = text[: max_chars_per_page - 1] + "…"
         result[page] = text
+    if missing:
+        for page, text in _fitz_page_texts(pdf_bytes, missing).items():
+            if len(text) > max_chars_per_page:
+                text = text[: max_chars_per_page - 1] + "…"
+            result[page] = text
     return result
 
 
