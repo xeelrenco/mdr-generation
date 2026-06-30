@@ -1,9 +1,11 @@
-"""MDR row title formatting (RACI base + instance suffix)."""
+"""MDR row title formatting (RACI base + instance suffix + optional SoW-specific part)."""
 
 from __future__ import annotations
 
 import re
 from typing import Optional
+
+DISPLAY_TITLE_SEPARATOR = " | "
 
 
 def _clean_instance_label(label: str, index: int) -> str:
@@ -24,20 +26,38 @@ def format_mdr_title(
     instance_label: str = "",
 ) -> str:
     """
-    Base always RACI catalog title.
+    RACI catalog title with optional instance suffix (no SoW part).
     - index None or <=0: raci_title only
-    - index == 1 with no meaningful label: raci_title only (single instance)
-    - N > 1: '{title} - {n}' optional ' - {label}'
+    - meaningful label: '{title} - {label}' (no index number)
+    - index == 1 with no label: raci_title only
+    - otherwise: '{title} - {n}'
     """
     base = (raci_title or "").strip()
     if not base:
         return ""
     if instance_index is None or instance_index <= 0:
         return base
-    if instance_index == 1 and not _clean_instance_label(instance_label, 1):
-        return base
-    title = f"{base} - {instance_index}"
-    label = _clean_instance_label(instance_label, instance_index)
+    label = _clean_instance_label(instance_label, instance_index or 0)
     if label:
-        title = f"{title} - {label}"
-    return title
+        return f"{base} - {label}"
+    if instance_index == 1:
+        return base
+    return f"{base} - {instance_index}"
+
+
+def format_mdr_display_title(
+    raci_title: str,
+    instance_index: Optional[int],
+    instance_label: str = "",
+    sow_specific_title: Optional[str] = None,
+    *,
+    separator: str = DISPLAY_TITLE_SEPARATOR,
+) -> str:
+    """Col B: RACI | SoW when enriched; else RACI - label or RACI - n if needed."""
+    specific = (sow_specific_title or "").strip()
+    if specific:
+        base = (raci_title or "").strip()
+        if not base:
+            return specific
+        return f"{base}{separator}{specific}"
+    return format_mdr_title(raci_title, instance_index, instance_label)

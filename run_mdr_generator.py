@@ -61,6 +61,9 @@ run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_
 write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
 run_document_scope_pass = _im("mdr_generator.3b_document_scope").run_document_scope_pass
+run_title_enrichment_pass = _im(
+    "mdr_generator.3d_title_enrichment"
+).run_title_enrichment_pass
 expand_scope_to_line_items = _im(
     "mdr_generator.3c_instance_expansion"
 ).expand_scope_to_line_items
@@ -110,6 +113,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Salta scheduling predecessor (Fase 6)",
     )
+    p.add_argument(
+        "--no-title-enrichment",
+        action="store_true",
+        help="Disabilita Step 3d arricchimento/split titoli SoW",
+    )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -139,6 +147,9 @@ def main() -> int:
         "pass2", cli_model=args.scope_pass2_llm_model
     )
     schedule_enabled = cfg_bool("SCHEDULE_ENABLED", default=False) and not args.no_schedule
+    title_enrichment_enabled = cfg_bool(
+        "TITLE_ENRICHMENT_ENABLED", default=True
+    ) and not args.no_title_enrichment
 
     print(f"LLM pass 1 (scope): {pass1_provider} / {pass1_model}")
     if pass2_enabled:
@@ -146,6 +157,9 @@ def main() -> int:
     else:
         print("LLM pass 2 (gap):   disabilitato")
     print(f"Schedule (Step 5):   {'attivo' if schedule_enabled else 'disabilitato'}")
+    print(
+        f"Title enrichment (3d): {'attivo (v2 split)' if title_enrichment_enabled else 'disabilitato'}"
+    )
     print(f"LLM parallel workers: {llm_parallel_workers()}")
     print(f"Output Excel:      {output_dir}")
     print(f"Output JSON/audit: {json_dir}")
@@ -159,6 +173,7 @@ def main() -> int:
     discipline_short_codes: dict[str, str] = {}
     line_items = []
     scope_decisions = []
+    title_enrichment_audit: dict = {"enabled": False}
     dup_removed = 0
     duration_populated = 0
     manhours_populated = 0
@@ -278,6 +293,34 @@ def main() -> int:
             f"({scalable_in_scope} Scalable, {len(in_scope) - scalable_in_scope} auto count=1)"
         )
 
+        if title_enrichment_enabled:
+            print("Step 3d: titoli SoW-specifici e split righe (sow_elements)...")
+            title_model = cfg("TITLE_ENRICHMENT_LLM_MODEL") or args.scope_llm_model
+            scope_decisions, title_enrichment_audit = run_title_enrichment_pass(
+                scope_pdfs,
+                raw_signals,
+                normalized,
+                scope_decisions,
+                json_dir,
+                model=title_model,
+            )
+            in_scope = [d for d in scope_decisions if d.in_scope]
+            print(
+                f"  -> {title_enrichment_audit.get('docs_with_sow', 0)}/"
+                f"{len(in_scope)} doc con titolo SoW; "
+                f"righe {title_enrichment_audit.get('baseline_rows', '?')} → "
+                f"{title_enrichment_audit.get('final_rows', '?')} "
+                f"(+{title_enrichment_audit.get('extra_rows', 0)} split)"
+            )
+        else:
+            save_json(
+                json_dir / "title_enrichment_audit.json",
+                {
+                    "enabled": False,
+                    "reason": "TITLE_ENRICHMENT_ENABLED=false or --no-title-enrichment",
+                },
+            )
+
         print("Step 3c: espansione istanze MDR...")
         line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
@@ -395,6 +438,10 @@ def main() -> int:
         manhours_populated_count=manhours_populated,
         schedule_enabled=schedule_enabled,
         schedule_dated_rows=schedule_dated_rows,
+        title_enrichment_enabled=title_enrichment_enabled,
+        title_enrichment_pairs_llm=title_enrichment_audit.get("pairs_llm", 0),
+        title_enrichment_docs_with_sow=title_enrichment_audit.get("docs_with_sow", 0),
+        title_enrichment_extra_rows=title_enrichment_audit.get("extra_rows", 0),
         elapsed_seconds=round(elapsed_seconds, 1),
         llm_estimated_cost_usd=llm_usage.total_cost_usd,
         llm_total_input_tokens=llm_usage.total_input_tokens,

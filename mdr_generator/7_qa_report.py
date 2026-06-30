@@ -258,6 +258,21 @@ def write_qa_report(
             summary.document_scope_decisions,
             "Pass LLM per coppia (in scope / istanze)",
         ],
+        [
+            "3d. Title enrichment (SoW)",
+            "Sì" if summary.title_enrichment_enabled else "No",
+            "Titoli SoW-specifici + split righe v2 (sow_elements)",
+        ],
+        [
+            "   — doc con titolo SoW",
+            summary.title_enrichment_docs_with_sow if summary.title_enrichment_enabled else "—",
+            "Documenti con almeno un sow_specific_title",
+        ],
+        [
+            "   — righe extra da split",
+            summary.title_enrichment_extra_rows if summary.title_enrichment_enabled else "—",
+            "Righe MDR oltre il conteggio post-3b",
+        ],
         ["4. Righe MDR finali", summary.mdr_line_items or summary.selected_count, "Output Excel MDR"],
         [
             "   — durata timeline popolata",
@@ -466,6 +481,8 @@ def write_qa_report(
                     s.chapter_name,
                     s.mdr_document_title,
                     s.raci_title,
+                    s.sow_specific_title,
+                    s.sow_title_confidence,
                     s.raci_title_key,
                     s.instance_count,
                     "Sì" if s.scalable else "No",
@@ -502,8 +519,10 @@ def write_qa_report(
         [
             "Disciplina",
             "Capitolo",
-            "Titolo MDR",
+            "Titolo display (col B)",
             "Titolo RACI",
+            "Titolo SoW",
+            "Conf. SoW",
             "TitleKey",
             "Istanze",
             "Scalable",
@@ -516,7 +535,7 @@ def write_qa_report(
             "Type",
         ],
         mdr_rows,
-        [10, 26, 44, 36, 14, 8, 10, 12, 12, 14, 14, 12, 10],
+        [10, 26, 44, 36, 36, 10, 14, 8, 10, 12, 12, 14, 14, 12, 10, 10],
     )
 
     # --- Foglio 5: Confronto_Renco ---

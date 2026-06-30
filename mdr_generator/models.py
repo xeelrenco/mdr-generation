@@ -88,6 +88,9 @@ class RaciCandidate:
 class DocumentInstanceSpec:
     index: int
     label: str = ""
+    sow_specific_title: str = ""
+    sow_title_confidence: str = ""
+    sow_title_evidence: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -143,6 +146,9 @@ class MdrLineItem:
     selection_reason: str = ""
     bucket: str = "without_history"
     decision_source: str = ""
+    sow_specific_title: str = ""
+    sow_title_confidence: str = ""
+    sow_title_evidence: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -199,6 +205,10 @@ class PipelineSummary:
     manhours_populated_count: int = 0
     schedule_enabled: bool = False
     schedule_dated_rows: int = 0
+    title_enrichment_enabled: bool = False
+    title_enrichment_pairs_llm: int = 0
+    title_enrichment_docs_with_sow: int = 0
+    title_enrichment_extra_rows: int = 0
     elapsed_seconds: float = 0.0
     llm_estimated_cost_usd: float = 0.0
     llm_total_input_tokens: int = 0

@@ -50,3 +50,12 @@ PROJECT_START_DATE=
 
 # --- Parallelizzazione chiamate LLM (I/O-bound; default 8) ---
 LLM_PARALLEL_WORKERS=8
+
+# --- Step 3d: titoli SoW-specifici + split righe v2 (sow_elements) ---
+TITLE_ENRICHMENT_ENABLED=true
+TITLE_ENRICHMENT_SPLIT_ROWS=true
+TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC=15
+TITLE_ENRICHMENT_MIN_CONFIDENCE=medium
+TITLE_ENRICHMENT_LLM_MODEL=
+TITLE_ENRICHMENT_EXAMPLES_PATH=input/title_enrichment_examples.json
+TITLE_ENRICHMENT_MAX_EXAMPLES=10

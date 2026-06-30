@@ -1,0 +1,463 @@
+"""Step 3d: SoW-specific titles and v2 row split via sow_elements[]."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from .config import cfg, cfg_bool, cfg_int
+from .models import DocumentInstanceSpec, DocumentScopeDecision, NormalizedSignal, RawScopeSignal
+from .pair_scope_context import build_pair_sow_context_chunks
+from .parallel_workers import llm_parallel_workers, run_parallel
+from .raci_vocabulary import build_title_enrichment_prompt
+from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes
+from .title_enrichment_examples import load_title_enrichment_examples
+from .utils import save_json
+
+_CONFIDENCE_RANK = {"strong": 3, "medium": 2, "weak": 1, "": 0}
+
+
+def _pair_key(sig: NormalizedSignal) -> Tuple[str, str]:
+    return (sig.discipline_code, sig.chapter_name or "")
+
+
+def _min_confidence_rank() -> int:
+    raw = cfg("TITLE_ENRICHMENT_MIN_CONFIDENCE", "medium").lower()
+    return _CONFIDENCE_RANK.get(raw, 2)
+
+
+def _confidence_ok(confidence: str) -> bool:
+    return _CONFIDENCE_RANK.get((confidence or "").lower(), 0) >= _min_confidence_rank()
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _parse_sow_elements(
+    raw_elements: Any,
+    *,
+    max_elements: int,
+) -> List[dict]:
+    if not isinstance(raw_elements, list):
+        return []
+    out: List[dict] = []
+    seen: Set[str] = set()
+    for item in raw_elements:
+        if not isinstance(item, dict):
+            continue
+        title = _truncate(str(item.get("sow_specific_title") or ""), 120)
+        if not title:
+            continue
+        conf = str(item.get("confidence") or "medium").lower()
+        if not _confidence_ok(conf):
+            continue
+        dedupe = title.lower()
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        out.append(
+            {
+                "label": _truncate(str(item.get("label") or ""), 80),
+                "sow_specific_title": title,
+                "confidence": conf,
+                "evidence_quote": _truncate(str(item.get("evidence_quote") or ""), 250),
+            }
+        )
+        if len(out) >= max_elements:
+            break
+    return out
+
+
+def _apply_elements_to_decision(
+    dec: DocumentScopeDecision,
+    elements: List[dict],
+    *,
+    split_rows: bool,
+) -> Tuple[DocumentScopeDecision, dict]:
+    audit: dict = {
+        "title_key": dec.title_key,
+        "elements_raw": len(elements),
+        "count_before": dec.instance_count,
+    }
+    if not elements or not split_rows:
+        audit["outcome"] = "no_elements"
+        return dec, audit
+
+    count_before = max(dec.instance_count, 0)
+    new_count = len(elements)
+    qa_flags = list(dec.qa_flags)
+
+    if new_count == 1:
+        el = elements[0]
+        inst = DocumentInstanceSpec(
+            index=1,
+            label=el.get("label", ""),
+            sow_specific_title=el["sow_specific_title"],
+            sow_title_confidence=el.get("confidence", ""),
+            sow_title_evidence=el.get("evidence_quote", ""),
+        )
+        updated = replace(
+            dec,
+            instance_count=1,
+            instances=[inst],
+            selection_reason=f"{dec.selection_reason}; 3d: 1 SoW element",
+        )
+        audit["outcome"] = "single_element"
+        audit["count_after"] = 1
+        return updated, audit
+
+    instances = [
+        DocumentInstanceSpec(
+            index=i + 1,
+            label=el.get("label", ""),
+            sow_specific_title=el["sow_specific_title"],
+            sow_title_confidence=el.get("confidence", ""),
+            sow_title_evidence=el.get("evidence_quote", ""),
+        )
+        for i, el in enumerate(elements)
+    ]
+
+    if not dec.scalable:
+        qa_flags.append("sow_split_non_scalable")
+    elif new_count > count_before:
+        qa_flags.append("sow_split_expanded")
+    elif new_count < count_before:
+        qa_flags.append("sow_split_reduced_vs_3b")
+
+    updated = replace(
+        dec,
+        instance_count=new_count,
+        instances=instances,
+        qa_flags=qa_flags,
+        selection_reason=f"{dec.selection_reason}; 3d: {new_count} SoW elements",
+    )
+    audit["outcome"] = "multi_element_split"
+    audit["count_after"] = new_count
+    return updated, audit
+
+
+def _parse_enrichment_response(
+    data: Dict[str, Any],
+    decisions: List[DocumentScopeDecision],
+    *,
+    max_elements: int,
+    split_rows: bool,
+) -> Tuple[List[DocumentScopeDecision], List[dict]]:
+    valid_keys = {d.title_key for d in decisions}
+    decision_map = {d.title_key: d for d in decisions}
+    audit_rows: List[dict] = []
+    updated_map: Dict[str, DocumentScopeDecision] = {}
+
+    for item in data.get("documents") or []:
+        if not isinstance(item, dict):
+            continue
+        title_key = str(item.get("title_key") or "").strip().lower()
+        if title_key not in valid_keys:
+            audit_rows.append({"title_key": title_key, "outcome": "invalid_title_key"})
+            continue
+        elements = _parse_sow_elements(item.get("sow_elements"), max_elements=max_elements)
+        new_dec, row = _apply_elements_to_decision(
+            decision_map[title_key],
+            elements,
+            split_rows=split_rows,
+        )
+        updated_map[title_key] = new_dec
+        audit_rows.append(row)
+
+    result: List[DocumentScopeDecision] = []
+    for dec in decisions:
+        result.append(updated_map.get(dec.title_key, dec))
+
+    seen = {r["title_key"] for r in audit_rows if r.get("title_key")}
+    for dec in decisions:
+        if dec.title_key not in seen:
+            audit_rows.append({"title_key": dec.title_key, "outcome": "omitted_by_llm"})
+
+    return result, audit_rows
+
+
+def _run_enrichment_llm_for_pair(
+    disc: str,
+    chap: str,
+    pair_decisions: List[DocumentScopeDecision],
+    context_chunks: List[str],
+    examples: List[Any],
+    model: Optional[str],
+    *,
+    max_elements: int,
+    split_rows: bool,
+) -> Tuple[List[DocumentScopeDecision], List[dict], List[dict]]:
+    part_total = len(context_chunks)
+    llm_parts_audit: List[dict] = []
+
+    if part_total == 1:
+        prompt = build_title_enrichment_prompt(
+            disc,
+            chap,
+            pair_decisions,
+            context_chunks[0],
+            examples,
+            max_elements=max_elements,
+        )
+        data = call_scope_llm_text(
+            prompt, model=model, pass_id="pass1", stage="pass3d_title_enrichment"
+        )
+        decisions, rows = _parse_enrichment_response(
+            data,
+            pair_decisions,
+            max_elements=max_elements,
+            split_rows=split_rows,
+        )
+        llm_parts_audit.append(
+            {
+                "part": 1,
+                "part_total": 1,
+                "context_chars": len(context_chunks[0]),
+                "outcome": "ok",
+                "documents": rows,
+            }
+        )
+        return decisions, rows, llm_parts_audit
+
+    # Multi-part: merge sow_elements across parts (dedupe by title)
+    merged_elements: Dict[str, List[dict]] = {d.title_key: [] for d in pair_decisions}
+    all_rows: List[dict] = []
+
+    for idx, chunk in enumerate(context_chunks, start=1):
+        prompt = build_title_enrichment_prompt(
+            disc,
+            chap,
+            pair_decisions,
+            chunk,
+            examples,
+            max_elements=max_elements,
+            part_index=idx,
+            part_total=part_total,
+        )
+        data = call_scope_llm_text(
+            prompt, model=model, pass_id="pass1", stage="pass3d_title_enrichment"
+        )
+        _, rows = _parse_enrichment_response(
+            data,
+            pair_decisions,
+            max_elements=max_elements,
+            split_rows=False,
+        )
+        for item in data.get("documents") or []:
+            if not isinstance(item, dict):
+                continue
+            tk = str(item.get("title_key") or "").strip().lower()
+            if tk not in merged_elements:
+                continue
+            for el in _parse_sow_elements(item.get("sow_elements"), max_elements=max_elements):
+                titles = {e["sow_specific_title"].lower() for e in merged_elements[tk]}
+                if el["sow_specific_title"].lower() not in titles:
+                    merged_elements[tk].append(el)
+                if len(merged_elements[tk]) >= max_elements:
+                    break
+        llm_parts_audit.append(
+            {
+                "part": idx,
+                "part_total": part_total,
+                "context_chars": len(chunk),
+                "outcome": "ok",
+                "documents": rows,
+            }
+        )
+
+    final: List[DocumentScopeDecision] = []
+    for dec in pair_decisions:
+        els = merged_elements.get(dec.title_key, [])[:max_elements]
+        new_dec, row = _apply_elements_to_decision(dec, els, split_rows=split_rows)
+        final.append(new_dec)
+        all_rows.append(row)
+
+    return final, all_rows, llm_parts_audit
+
+
+@dataclass
+class _EnrichmentPairJob:
+    pair: Tuple[str, str]
+    decisions: List[DocumentScopeDecision]
+    context_chunks: List[str]
+    context_meta: dict
+    pair_audit: dict
+
+
+def _run_enrichment_pair_job(
+    job: _EnrichmentPairJob,
+    examples: List[Any],
+    model: Optional[str],
+    *,
+    max_elements: int,
+    split_rows: bool,
+) -> Tuple[_EnrichmentPairJob, List[DocumentScopeDecision], int]:
+    disc, chap = job.pair
+    try:
+        decisions, rows, llm_parts = _run_enrichment_llm_for_pair(
+            disc,
+            chap,
+            job.decisions,
+            job.context_chunks,
+            examples,
+            model,
+            max_elements=max_elements,
+            split_rows=split_rows,
+        )
+        job.pair_audit["outcome"] = "ok"
+        job.pair_audit["documents"] = rows
+        job.pair_audit["llm_parts"] = llm_parts
+        return job, decisions, len(job.context_chunks)
+    except Exception as ex:
+        job.pair_audit["outcome"] = "llm_error"
+        job.pair_audit["error"] = str(ex)
+        return job, job.decisions, len(job.context_chunks)
+
+
+def _baseline_row_count(decisions: List[DocumentScopeDecision]) -> int:
+    return sum(max(d.instance_count, 0) for d in decisions if d.in_scope)
+
+
+def run_title_enrichment_pass(
+    scope_pdfs: List[Path],
+    raw_signals: List[RawScopeSignal],
+    normalized: List[NormalizedSignal],
+    decisions: List[DocumentScopeDecision],
+    json_dir: Path,
+    model: Optional[str] = None,
+) -> Tuple[List[DocumentScopeDecision], dict]:
+    split_rows = cfg_bool("TITLE_ENRICHMENT_SPLIT_ROWS", default=True)
+    max_elements = cfg_int("TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC", 15)
+    examples = load_title_enrichment_examples()
+
+    in_scope = [d for d in decisions if d.in_scope and d.instance_count >= 1]
+    baseline_rows = _baseline_row_count(decisions)
+
+    if not scope_pdfs or not in_scope:
+        summary = {
+            "enabled": True,
+            "split_rows": split_rows,
+            "baseline_rows": baseline_rows,
+            "final_rows": baseline_rows,
+            "extra_rows": 0,
+            "docs_with_sow": 0,
+            "pairs_llm": 0,
+            "reason": "no_pdf_or_no_decisions",
+        }
+        save_json(json_dir / "title_enrichment_audit.json", summary)
+        return decisions, summary
+
+    pair_signals: Set[Tuple[str, str]] = {
+        _pair_key(sig) for sig in normalized if sig.chapter_name
+    }
+    grouped: Dict[Tuple[str, str], List[DocumentScopeDecision]] = {}
+    for dec in in_scope:
+        key = (dec.discipline_code, dec.chapter_name)
+        if key not in pair_signals:
+            continue
+        grouped.setdefault(key, []).append(dec)
+
+    pdf_bytes_by_name: Dict[str, bytes] = {}
+    for pdf_path in scope_pdfs:
+        pdf_bytes_by_name[pdf_path.name] = read_scope_pdf_bytes(pdf_path)
+
+    decision_map = {d.title_key: d for d in decisions}
+    jobs: List[_EnrichmentPairJob] = []
+    audit_pairs: List[dict] = []
+
+    for pair, pair_decisions in sorted(grouped.items()):
+        context_chunks, context_meta = build_pair_sow_context_chunks(
+            pair,
+            raw_signals,
+            normalized,
+            pdf_bytes_by_name,
+        )
+        pair_audit: dict = {
+            "discipline_code": pair[0],
+            "chapter_name": pair[1],
+            "document_count": len(pair_decisions),
+            "context": context_meta,
+        }
+        jobs.append(
+            _EnrichmentPairJob(
+                pair=pair,
+                decisions=pair_decisions,
+                context_chunks=context_chunks,
+                context_meta=context_meta,
+                pair_audit=pair_audit,
+            )
+        )
+
+    pairs_llm = 0
+    llm_calls = 0
+    if jobs:
+        workers = llm_parallel_workers()
+
+        def _desc(job: _EnrichmentPairJob) -> str:
+            return f"{job.pair[0]}|{job.pair[1]}"
+
+        def _note(
+            job: _EnrichmentPairJob,
+            _result: Tuple[_EnrichmentPairJob, List[DocumentScopeDecision], int],
+        ) -> str:
+            n = len(job.decisions)
+            if job.pair_audit.get("outcome") == "ok":
+                return f"ok ({n} doc)"
+            return f"ERROR ({job.pair_audit.get('error', '?')})"
+
+        def _job_fn(job: _EnrichmentPairJob):
+            return _run_enrichment_pair_job(
+                job,
+                examples,
+                model,
+                max_elements=max_elements,
+                split_rows=split_rows,
+            )
+
+        results = run_parallel(
+            jobs,
+            _job_fn,
+            max_workers=workers,
+            label="3d Title enrichment",
+            describe=_desc,
+            result_note=_note,
+        )
+        for job, updated, call_count in sorted(results, key=lambda x: x[0].pair):
+            for dec in updated:
+                decision_map[dec.title_key] = dec
+            pairs_llm += 1
+            llm_calls += call_count
+            audit_pairs.append(job.pair_audit)
+
+    final_decisions = [decision_map.get(d.title_key, d) for d in decisions]
+    final_rows = _baseline_row_count(final_decisions)
+    docs_with_sow = sum(
+        1
+        for d in final_decisions
+        if d.in_scope
+        and d.instances
+        and any(i.sow_specific_title for i in d.instances)
+    )
+
+    summary = {
+        "enabled": True,
+        "split_rows": split_rows,
+        "min_confidence": cfg("TITLE_ENRICHMENT_MIN_CONFIDENCE", "medium"),
+        "max_elements_per_doc": max_elements,
+        "examples_loaded": len(examples),
+        "baseline_rows": baseline_rows,
+        "final_rows": final_rows,
+        "extra_rows": max(0, final_rows - baseline_rows),
+        "docs_with_sow": docs_with_sow,
+        "pairs_llm": pairs_llm,
+        "llm_calls_total": llm_calls,
+        "llm_parallel_workers": llm_parallel_workers(),
+        "pairs": audit_pairs,
+    }
+    save_json(json_dir / "title_enrichment_audit.json", summary)
+    return final_decisions, summary

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Set, Tuple
 
-from .mdr_title import format_mdr_title
+from .mdr_title import format_mdr_display_title
 from .models import (
     DocumentInstanceSpec,
     DocumentScopeDecision,
@@ -15,6 +15,8 @@ from .models import (
 
 def _instance_specs(dec: DocumentScopeDecision) -> List[DocumentInstanceSpec]:
     if dec.instance_count <= 1:
+        if dec.instances:
+            return dec.instances[:1] if dec.instances else [DocumentInstanceSpec(index=1)]
         return [DocumentInstanceSpec(index=1, label="")]
     if dec.instances and len(dec.instances) == dec.instance_count:
         return dec.instances
@@ -30,7 +32,7 @@ def expand_scope_to_line_items(
 ) -> Tuple[List[MdrLineItem], int]:
     cand_map: Dict[str, RaciCandidate] = {c.title_key: c for c in ranked_candidates}
     line_items: List[MdrLineItem] = []
-    seen_titles: Set[str] = set()
+    seen_keys: Set[str] = set()
     dup_removed = 0
 
     for dec in decisions:
@@ -45,19 +47,22 @@ def expand_scope_to_line_items(
 
         for spec in specs:
             if dec.instance_count > 1:
-                mdr_title = format_mdr_title(
-                    dec.raci_title, spec.index, spec.label
-                )
                 inst_idx: int | None = spec.index
             else:
-                mdr_title = format_mdr_title(dec.raci_title, None, "")
                 inst_idx = None
 
-            dedupe_key = mdr_title.strip().lower()
-            if dedupe_key in seen_titles:
+            mdr_title = format_mdr_display_title(
+                dec.raci_title,
+                inst_idx,
+                spec.label,
+                spec.sow_specific_title,
+            )
+
+            dedupe_key = f"{dec.title_key}\0{mdr_title.strip().lower()}"
+            if dedupe_key in seen_keys:
                 dup_removed += 1
                 continue
-            seen_titles.add(dedupe_key)
+            seen_keys.add(dedupe_key)
 
             line_items.append(
                 MdrLineItem(
@@ -79,6 +84,9 @@ def expand_scope_to_line_items(
                     selection_reason=dec.selection_reason,
                     bucket=bucket,
                     decision_source=dec.decision_source,
+                    sow_specific_title=spec.sow_specific_title,
+                    sow_title_confidence=spec.sow_title_confidence,
+                    sow_title_evidence=spec.sow_title_evidence,
                 )
             )
 

@@ -325,3 +325,74 @@ def build_document_scope_prompt(
 
 # backward compatibility
 build_scope_text_prompt = build_scope_pdf_prompt
+
+
+def build_title_enrichment_prompt(
+    discipline_code: str,
+    chapter_name: str,
+    decisions: List[Any],
+    sow_context: str,
+    examples: Optional[List[Any]] = None,
+    *,
+    max_elements: int = 15,
+    part_index: Optional[int] = None,
+    part_total: Optional[int] = None,
+) -> str:
+    """Prompt for Step 3d: SoW-specific titles and row split elements."""
+    lines: List[str] = []
+    for dec in decisions:
+        hint = f" (3b instances={dec.instance_count})" if getattr(dec, "instance_count", 1) > 1 else ""
+        lines.append(f"- {dec.title_key} | {dec.raci_title}{hint}")
+
+    catalog_block = "\n".join(lines)
+    examples_block = ""
+    if examples:
+        ex_lines = [ex.to_prompt_block() for ex in examples]
+        examples_block = (
+            "\n\nEXAMPLES (historical MDR style — one SoW-specific title per element):\n"
+            + "\n".join(ex_lines)
+        )
+
+    multi_part = part_total is not None and part_total > 1
+    part_note = ""
+    if multi_part:
+        part_note = f"""
+IMPORTANT: SoW context PART {part_index} of {part_total} for pair {discipline_code} | {chapter_name}.
+List sow_elements evident ONLY in this part.
+"""
+
+    return f"""You analyze Scope of Work (SoW) excerpts for an EPC/engineering project.
+
+The RACI pair {discipline_code} | {chapter_name} is confirmed in project scope.
+Each catalog document below may map to ONE OR MORE distinct MDR rows when the SoW lists
+separate buildings, units, equipment tags, areas, or systems.
+{part_note}
+SOW CONTEXT:
+{sow_context}
+
+CATALOG DOCUMENTS IN SCOPE (TitleKey | RACI Title):
+{catalog_block}
+{examples_block}
+
+For EACH catalog document above, output one object:
+- title_key: exact TitleKey from the list
+- sow_elements: list of 0..{max_elements} distinct elements from the SoW:
+  - label: short disambiguator (building name, unit, tag, area); optional
+  - sow_specific_title: project-specific MDR description (max 120 chars, English preferred)
+  - confidence: "strong" | "medium" | "weak"
+  - evidence_quote: verbatim SoW quote (max 250 chars)
+
+RULES:
+- Use ONLY title_key values from the catalog list.
+- Each sow_element = ONE distinct asset/building/tag/area/system in the SoW.
+- Do NOT invent equipment tags or building names absent from the SoW.
+- Keep the RACI document type in sow_specific_title (Layout, P&ID, Calculation Report, etc.).
+- Prefer plant codes (e.g. GCS00), building names, compressor units, floor levels, equipment tags.
+- If SoW does not support a specific title → sow_elements: [] (empty).
+- Do NOT duplicate the same element twice for one document.
+- weak confidence: only when evidence is thin; prefer omitting over guessing.
+
+Respond with JSON only:
+{{"documents": [...]}}
+"""
+
