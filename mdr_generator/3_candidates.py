@@ -8,6 +8,7 @@ from typing import Dict, List, Set, Tuple
 import duckdb
 import pandas as pd
 
+from .db import DOCUMENTS_ENRICHED_VIEW
 from .models import NormalizedSignal, RaciCandidate
 
 
@@ -25,10 +26,10 @@ def fetch_raci_candidates(
         if not sig.chapter_name:
             continue
         rows = conn.execute(
-            """
+            f"""
             SELECT TitleKey, Title, DisciplineCode, ChapterName, TypeCode,
                    CategoryCode, DisciplineWbs, CategoryWorkflow, Scalable
-            FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+            FROM {DOCUMENTS_ENRICHED_VIEW}
             WHERE DisciplineCode = $1 AND ChapterName = $2
             ORDER BY Title
             """,

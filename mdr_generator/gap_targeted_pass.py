@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import duckdb
 
 from .config import cfg_bool, cfg_int
+from .db import DOCUMENTS_ENRICHED_VIEW
 from .models import NormalizedSignal
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import RaciVocabulary, build_gap_targeted_pass_prompt
@@ -35,9 +36,9 @@ def _fetch_catalog_pair_examples(
     examples: Dict[Tuple[str, str], List[str]] = {}
     for disc, chap in pairs:
         rows = conn.execute(
-            """
+            f"""
             SELECT Title
-            FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+            FROM {DOCUMENTS_ENRICHED_VIEW}
             WHERE DisciplineCode = $1 AND ChapterName = $2 AND Title IS NOT NULL
             ORDER BY Title
             LIMIT $3
@@ -145,7 +146,7 @@ def run_gap_targeted_pass(
         "provider": pass2_provider,
         "model": pass2_model,
         "llm_parallel_workers": llm_parallel_workers(),
-        "pair_source": "mdr_reconciliation.v_DocumentsEnriched",
+        "pair_source": DOCUMENTS_ENRICHED_VIEW,
         "catalog_pairs_total": len(catalog_pairs),
         "missing_before_pass2": len(missing),
         "max_pairs_limit": max_pairs,

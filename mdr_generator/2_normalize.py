@@ -130,7 +130,7 @@ def normalize_signals(
 ) -> Tuple[List[NormalizedSignal], List[UncertainMapping]]:
     """
     Accetta solo coppie (discipline_code, chapter_name) presenti nel catalogo
-    v_DocumentsEnriched. Lo stesso capitolo può comparire più volte con discipline
+    raci_matrix.v_DocumentsEnriched. Lo stesso capitolo può comparire più volte con discipline
     diverse se l'LLM emette segnali distinti e ogni coppia esiste in catalogo.
     """
     normalized: List[NormalizedSignal] = []

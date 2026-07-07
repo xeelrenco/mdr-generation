@@ -264,7 +264,7 @@ def main() -> int:
         )
         print(f"  -> {len(profiles)} profili TitleKey")
 
-        print("Step 3: candidati RACI da v_DocumentsEnriched...")
+        print("Step 3: candidati RACI da raci_matrix.v_DocumentsEnriched...")
         candidates = fetch_raci_candidates(conn, normalized)
         save_candidates_csv(candidates, candidates_csv)
         print(f"  -> {len(candidates)} candidati")

@@ -8,6 +8,8 @@ import duckdb
 
 from .config import cfg
 
+DOCUMENTS_ENRICHED_VIEW = "my_db.raci_matrix.v_DocumentsEnriched"
+
 
 def connect_motherduck() -> duckdb.DuckDBPyConnection:
     token = cfg("MOTHERDUCK_TOKEN")
@@ -60,6 +62,6 @@ def load_canonical_pairs(conn: duckdb.DuckDBPyConnection) -> Set[tuple[str, str]
 
 def fetch_documents_enriched_keys(conn: duckdb.DuckDBPyConnection) -> Set[str]:
     rows = conn.execute(
-        "SELECT TitleKey FROM my_db.mdr_reconciliation.v_DocumentsEnriched"
+        f"SELECT TitleKey FROM {DOCUMENTS_ENRICHED_VIEW}"
     ).fetchall()
     return {r[0] for r in rows if r[0]}

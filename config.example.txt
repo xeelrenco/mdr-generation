@@ -18,7 +18,7 @@ SCOPE_PASS1_CHUNK_OVERLAP=1
 SCOPE_PASS1_CHUNK_REPASS_ENABLED=true
 SCOPE_PASS1_CHUNK_REPASS_MIN_CHARS=200
 
-# --- Pass 2: gap mirato su coppie catalogo RACI (v_DocumentsEnriched) non estratte al pass 1 (Step 2c) ---
+# --- Pass 2: gap mirato su coppie catalogo RACI (raci_matrix.v_DocumentsEnriched) non estratte al pass 1 (Step 2c) ---
 # Nessun re-pass su pass 2 — una chiamata LLM per chunk
 SCOPE_PASS2_ENABLED=true
 SCOPE_PASS2_LLM_MODEL=gemini-2.5-pro

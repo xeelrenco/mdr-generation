@@ -6,6 +6,7 @@ from typing import Dict, List, Set, Tuple, Union
 
 import duckdb
 
+from .db import DOCUMENTS_ENRICHED_VIEW
 from .models import (
     MdrLineItem,
     NormalizedSignal,
@@ -66,7 +67,7 @@ def _fetch_reconciliation_for_titles(
     if not titles:
         return []
     return conn.execute(
-        """
+        f"""
         WITH input_titles AS (
             SELECT unnest($1::VARCHAR[]) AS Document_title
         )
@@ -80,7 +81,7 @@ def _fetch_reconciliation_for_titles(
         FROM input_titles t
         LEFT JOIN my_db.mdr_reconciliation.v_MdrReconciliationResults_Consolidated c
             ON c.Document_title = t.Document_title
-        LEFT JOIN my_db.mdr_reconciliation.v_DocumentsEnriched d
+        LEFT JOIN {DOCUMENTS_ENRICHED_VIEW} d
             ON d.Title = c.ConsolidatedRaciTitle
         """,
         [titles],

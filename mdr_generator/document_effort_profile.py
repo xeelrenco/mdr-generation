@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 import duckdb
 
+from .db import DOCUMENTS_ENRICHED_VIEW
 from .utils import save_json
 
 TIMELINE_DURATION_SQL = """
@@ -48,9 +49,9 @@ def load_document_effort_profiles(
     conn: duckdb.DuckDBPyConnection,
 ) -> Dict[str, DocumentEffortProfile]:
     catalog_rows = conn.execute(
-        """
+        f"""
         SELECT TitleKey, Scalable
-        FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+        FROM {DOCUMENTS_ENRICHED_VIEW}
         WHERE TitleKey IS NOT NULL
         """
     ).fetchall()

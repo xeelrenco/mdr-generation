@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import duckdb
 
+from .db import DOCUMENTS_ENRICHED_VIEW
+
 
 @dataclass
 class RaciVocabulary:
@@ -41,9 +43,9 @@ def load_raci_vocabulary(conn: duckdb.DuckDBPyConnection) -> RaciVocabulary:
         "SELECT Name FROM my_db.raci_matrix.DocumentChapters ORDER BY Name"
     ).fetchall()
     pair_rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT DisciplineCode, ChapterName
-        FROM my_db.mdr_reconciliation.v_DocumentsEnriched
+        FROM {DOCUMENTS_ENRICHED_VIEW}
         WHERE DisciplineCode IS NOT NULL AND ChapterName IS NOT NULL
         ORDER BY DisciplineCode, ChapterName
         """
