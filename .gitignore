@@ -6,4 +6,5 @@ __pycache__/
 mdr_generator/__pycache__/
 input/*
 !input/title_enrichment_examples.json
+!input/Master Document Register Template.xlsx
 project-5469d685-421b-4832-8bb-50b0d702babb.json
