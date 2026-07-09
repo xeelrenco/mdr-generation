@@ -37,7 +37,6 @@ FILTER_LAST_COL = "AI"  # col 35 — KBS INTERNAL CODE
 FILTER_MERGED_DESC_FIRST_COL = COL_DESCRIPTION
 FILTER_MERGED_DESC_LAST_COL = 6  # F
 SHEET_NAME = "MDR"
-RENCO_PREFIX = "8360"
 DATE_NUMBER_FORMAT = "mm-dd-yy"
 
 
@@ -81,9 +80,10 @@ def _copy_template_header(source: Worksheet, target: Worksheet, max_row: int = H
         target.add_image(copy(image), image.anchor)
 
 
-def _reneco_code_formula(row: int) -> str:
+def _reneco_code_formula(row: int, project_prefix: str) -> str:
     """H (originator) is left empty for manual entry; K is the I+J pair progressive."""
-    return f'="{RENCO_PREFIX}-"&H{row}&"-"&I{row}&J{row}&"-"&K{row}'
+    prefix = (project_prefix or "0000").replace('"', '""')
+    return f'="{prefix}-"&H{row}&"-"&I{row}&J{row}&"-"&K{row}'
 
 
 def _line_title(doc: LineItemLike) -> str:
@@ -185,7 +185,7 @@ def write_mdr_excel(
         ws.cell(row=row, column=COL_CATEGORY, value=safe_excel_value(_line_category(doc)))
         ws.cell(row=row, column=COL_WBS, value=safe_excel_value(_line_wbs(doc)))
         ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(_line_workflow(doc)))
-        ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row))
+        ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row, proj))
         if isinstance(doc, MdrLineItem):
             if doc.manhours is not None and doc.manhours >= 0:
                 ws.cell(row=row, column=COL_MANHOURS, value=doc.manhours)

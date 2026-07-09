@@ -40,8 +40,8 @@ VERTEX_PROJECT_ID=
 VERTEX_LOCATION=europe-west1
 GEMINI_MODEL=gemini-2.5-flash
 
-# Codice progetto per confronto QA Step 6 vs storico MDR (MotherDuck).
-# Non influenza Pass 2 (usa catalogo RACI) né il nome file output (--project-name).
+# Codice progetto: prefisso RENCO CODE in Excel (col. G), confronto QA Step 6 vs storico MDR,
+# e default per --project-name se non passato da CLI.
 PROJECT_CODE=7350
 
 # --- Schedule predecessor (Step 5: ordine + date MDR) ---
@@ -58,4 +58,4 @@ TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC=15
 TITLE_ENRICHMENT_MIN_CONFIDENCE=medium
 TITLE_ENRICHMENT_LLM_MODEL=
 TITLE_ENRICHMENT_EXAMPLES_PATH=input/title_enrichment_examples.json
-TITLE_ENRICHMENT_MAX_EXAMPLES=10
+TITLE_ENRICHMENT_MAX_EXAMPLES=24
