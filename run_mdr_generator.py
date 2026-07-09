@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from mdr_generator.config import PROJECT_DIR, cfg, cfg_bool
+from mdr_generator.config import PROJECT_DIR, SETTINGS_PATH, cfg, cfg_bool
 from mdr_generator.db import (
     connect_motherduck,
     load_discipline_short_codes,
@@ -124,7 +124,6 @@ def _parse_args() -> argparse.Namespace:
 
 def _confirm_project_code_or_exit(effective_project: str) -> bool:
     configured_project = cfg("PROJECT_CODE", "project")
-    config_path = PROJECT_DIR / "config.txt"
     print(f"PROJECT_CODE attualmente settato: {configured_project}")
     if effective_project != configured_project:
         print(f"Questo run usera': {effective_project} (override via --project-name)")
@@ -139,7 +138,7 @@ def _confirm_project_code_or_exit(effective_project: str) -> bool:
             return True
         if answer in ("n", "no"):
             print("\nPer cambiarlo puoi:")
-            print(f"1. Modificare PROJECT_CODE in `{config_path}`")
+            print(f"1. Modificare `[project] code` in `{SETTINGS_PATH}`")
             print(
                 '2. Oppure rilanciare da console con: '
                 'python run_mdr_generator.py --project-name "NUOVO_PROJECT_CODE"'

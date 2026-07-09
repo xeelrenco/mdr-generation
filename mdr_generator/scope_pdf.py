@@ -32,7 +32,7 @@ def _read_pdf_bytes(pdf_path: Path, max_mb: int) -> bytes:
     if max_mb > 0 and size_mb > max_mb:
         raise RuntimeError(
             f"{pdf_path.name} è {size_mb:.1f} MB (limite SCOPE_MAX_PDF_MB={max_mb}). "
-            "Riduci il PDF o aumenta il limite in config.txt."
+            "Riduci il PDF o aumenta il limite in settings.toml ([scope] max_pdf_mb)."
         )
     return data
 
@@ -433,7 +433,7 @@ def _call_claude_pdf(
     if stop_reason == "max_tokens":
         raise RuntimeError(
             f"Claude: risposta troncata (max_tokens={max_output_tokens}). "
-            "Aumenta CLAUDE_MAX_TOKENS in config.txt."
+            "Aumenta [providers.claude] max_tokens in settings.toml."
         )
 
     raw_text = _extract_anthropic_text(message)

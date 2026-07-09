@@ -63,7 +63,7 @@ class LlmUsageSummary:
         }
 
 
-# USD per 1M tokens — stime default, sovrascrivibili in config.txt
+# USD per 1M tokens — stime default, sovrascrivibili in settings.toml ([llm_pricing.*])
 _DEFAULT_PRICE_PER_1M: Dict[Tuple[str, str], float] = {
     ("gpt-5.5", "input"): 5.00,
     ("gpt-5.5", "output"): 30.00,
@@ -198,7 +198,7 @@ def build_usage_summary() -> LlmUsageSummary:
         lines=lines,
         provider_cost_usd=provider_cost,
         pricing_note=(
-            "Stima da token API e tariffe default/config (LLM_PRICE_USD_PER_1M_*). "
+            "Stima da token API e tariffe default/settings.toml ([llm_pricing.*]). "
             "gpt-5.5: $5/M input, $30/M output (standard ≤272K). "
             "OpenAI e Gemini/Vertex fatturati separatamente. "
             "Cached input e PDF multimodali possono divergere dal billing reale."

@@ -1,0 +1,67 @@
+# Copia questo file in settings.toml e compila i valori locali.
+
+[project]
+code = "7350"
+start_date = ""  # vuoto = oggi per PLANNED FIRST ISSUE
+
+[database]
+motherduck_db = "my_db"
+motherduck_token = ""
+
+[scope]
+sow_dir = "input/SoW"
+max_pdf_mb = 32
+
+[scope.pass1]
+llm_model = "gpt-5.5"
+chunk_enabled = true
+chunk_pages = 10
+chunk_overlap = 1
+chunk_repass_enabled = true
+chunk_repass_min_chars = 200
+
+[scope.pass2]
+enabled = true
+llm_model = "gemini-2.5-pro"
+max_pairs = 60
+chunk_enabled = true
+chunk_pages = 10
+chunk_overlap = 2
+
+[providers.openai]
+api_key = ""
+model = "gpt-5.5"
+
+[providers.claude]
+api_key = ""
+model = "claude-haiku-4-5"
+max_tokens = 16384
+
+[providers.vertex]
+credentials_path = ""
+project_id = ""
+location = "europe-west1"
+gemini_model = "gemini-2.5-pro"
+
+[schedule]
+enabled = true
+
+[parallel]
+llm_workers = 15
+
+[title_enrichment]
+enabled = true
+split_rows = true
+max_elements_per_doc = 15
+min_confidence = "medium"
+llm_model = ""  # vuoto = usa scope.pass1.llm_model
+examples_path = "input/title_enrichment_examples.json"
+max_examples = 24
+
+# Opzionale: override tariffe stima costi LLM (USD per 1M token)
+# [llm_pricing.gpt_5_5]
+# input_per_1m = 5.00
+# output_per_1m = 30.00
+# [llm_pricing.gemini_2_5_pro]
+# input_per_1m = 1.25
+# output_per_1m = 5.00

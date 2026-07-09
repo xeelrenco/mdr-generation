@@ -1,4 +1,4 @@
-config.txt
+settings.toml
 __pycache__/
 *.pyc
 .venv/

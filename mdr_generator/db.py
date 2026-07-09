@@ -15,7 +15,7 @@ def connect_motherduck() -> duckdb.DuckDBPyConnection:
     token = cfg("MOTHERDUCK_TOKEN")
     if not token:
         raise RuntimeError(
-            "MOTHERDUCK_TOKEN mancante in config.txt o variabile d'ambiente."
+            "MOTHERDUCK_TOKEN mancante in settings.toml ([database] motherduck_token)."
         )
     dbname = cfg("MOTHERDUCK_DB", "my_db")
     return duckdb.connect(f"md:{dbname}?token={token}")
