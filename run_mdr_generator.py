@@ -122,6 +122,32 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _confirm_project_code_or_exit(effective_project: str) -> bool:
+    configured_project = cfg("PROJECT_CODE", "project")
+    config_path = PROJECT_DIR / "config.txt"
+    print(f"PROJECT_CODE attualmente settato: {configured_project}")
+    if effective_project != configured_project:
+        print(f"Questo run usera': {effective_project} (override via --project-name)")
+
+    if not sys.stdin.isatty():
+        print("Prompt conferma saltato: input non interattivo.")
+        return True
+
+    while True:
+        answer = input("Vuoi mantenere questo project code? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes", "s", "si"):
+            return True
+        if answer in ("n", "no"):
+            print("\nPer cambiarlo puoi:")
+            print(f"1. Modificare PROJECT_CODE in `{config_path}`")
+            print(
+                '2. Oppure rilanciare da console con: '
+                'python run_mdr_generator.py --project-name "NUOVO_PROJECT_CODE"'
+            )
+            return False
+        print("Risposta non valida. Inserisci Y oppure n.")
+
+
 def main() -> int:
     args = _parse_args()
 
@@ -130,6 +156,8 @@ def main() -> int:
     json_dir = resolve_json_output_dir(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     project = args.project_name
+    if not _confirm_project_code_or_exit(project):
+        return 0
     pipeline_started_at = time.perf_counter()
     reset_usage_tracker()
 
