@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -127,6 +128,24 @@ def load_settings(path: Optional[Path] = None) -> Dict[str, str]:
 
 
 _cache: Optional[Dict[str, str]] = None
+_project_start_date_override: Optional[date] = None
+
+
+def set_project_start_date_override(value: Optional[date]) -> None:
+    global _project_start_date_override
+    _project_start_date_override = value
+
+
+def resolve_project_start_date() -> date:
+    if _project_start_date_override is not None:
+        return _project_start_date_override
+    raw = cfg("PROJECT_START_DATE", "").strip()
+    if raw:
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            pass
+    return date.today()
 
 
 def get_config(reload: bool = False) -> Dict[str, str]:

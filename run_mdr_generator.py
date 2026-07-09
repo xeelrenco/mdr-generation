@@ -17,10 +17,18 @@ import argparse
 import importlib
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 
-from mdr_generator.config import PROJECT_DIR, SETTINGS_PATH, cfg, cfg_bool
+from mdr_generator.config import (
+    PROJECT_DIR,
+    SETTINGS_PATH,
+    cfg,
+    cfg_bool,
+    resolve_project_start_date,
+    set_project_start_date_override,
+)
 from mdr_generator.db import (
     connect_motherduck,
     load_discipline_short_codes,
@@ -46,13 +54,6 @@ _im = importlib.import_module
 fetch_raci_candidates = _im("mdr_generator.3_candidates").fetch_raci_candidates
 save_candidates_csv = _im("mdr_generator.3_candidates").save_candidates_csv
 apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ranking
-apply_timeline_duration = _im("mdr_generator.4_timeline_duration").apply_timeline_duration
-load_timeline_duration_map = _im(
-    "mdr_generator.4_timeline_duration"
-).load_timeline_duration_map
-apply_manhours_from_duration = _im(
-    "mdr_generator.4_manhours"
-).apply_manhours_from_duration
 HOURS_PER_DURATION_DAY = _im("mdr_generator.4_manhours").HOURS_PER_DURATION_DAY
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
@@ -67,7 +68,7 @@ run_title_enrichment_pass = _im(
 expand_scope_to_line_items = _im(
     "mdr_generator.3c_instance_expansion"
 ).expand_scope_to_line_items
-schedule_line_items = _im("mdr_generator.5_schedule").schedule_line_items
+run_schedule_pass = _im("mdr_generator.5_schedule").run_schedule_pass
 write_mdr_excel = _im("mdr_generator.6_excel_output").write_mdr_excel
 
 
@@ -91,6 +92,13 @@ def _parse_args() -> argparse.Namespace:
         "--project-name",
         default=cfg("PROJECT_CODE", "project"),
         help="Prefisso nome file Excel/JSON output (default: PROJECT_CODE)",
+    )
+    p.add_argument(
+        "--project-start-date",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Override data inizio progetto per PLANNED FIRST ISSUE "
+        "(default: start_date in settings.toml, o oggi se vuoto)",
     )
     p.add_argument("--output-dir", default=str(PROJECT_DIR / "output"))
     p.add_argument(
@@ -122,27 +130,80 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _confirm_project_code_or_exit(effective_project: str) -> bool:
+def _parse_cli_start_date(raw: Optional[str]) -> Optional[date]:
+    if raw is None:
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError:
+        raise ValueError(
+            f"Data non valida: {raw!r}. Usa il formato YYYY-MM-DD, es. 2026-01-15."
+        )
+
+
+def _configured_start_date_label() -> str:
+    raw = cfg("PROJECT_START_DATE", "").strip()
+    if raw:
+        return raw
+    return f"(vuoto → oggi, {date.today().isoformat()})"
+
+
+def _print_project_settings_help() -> None:
+    print()
+    print("Per modificarli:")
+    print()
+    print("  Opzione A — file settings (permanente)")
+    print(f"    File: {SETTINGS_PATH}")
+    print("    Sezione [project]:")
+    print('      code = "CODICE_PROGETTO"')
+    print('      start_date = "YYYY-MM-DD"   (vuoto = data odierna)')
+    print()
+    print("  Opzione B — riga di comando (solo questo run)")
+    print('    python run_mdr_generator.py --project-name "CODICE_PROGETTO"')
+    print('    python run_mdr_generator.py --project-start-date "YYYY-MM-DD"')
+    print(
+        '    python run_mdr_generator.py --project-name "CODICE" '
+        '--project-start-date "YYYY-MM-DD"'
+    )
+    print()
+
+
+def _confirm_project_settings_or_exit(
+    effective_project: str,
+    *,
+    cli_start_date: Optional[date],
+) -> bool:
     configured_project = cfg("PROJECT_CODE", "project")
-    print(f"PROJECT_CODE attualmente settato: {configured_project}")
+    configured_start = _configured_start_date_label()
+    effective_start = resolve_project_start_date()
+
+    print("Impostazioni progetto:")
     if effective_project != configured_project:
-        print(f"Questo run usera': {effective_project} (override via --project-name)")
+        print(
+            f"  project code: {configured_project}"
+            f" → questo run userà: {effective_project} (--project-name)"
+        )
+    else:
+        print(f"  project code: {configured_project}")
+
+    if cli_start_date is not None:
+        print(
+            f"  start_date:   {configured_start}"
+            f" → questo run userà: {effective_start.isoformat()} (--project-start-date)"
+        )
+    else:
+        print(f"  start_date:   {configured_start}")
 
     if not sys.stdin.isatty():
         print("Prompt conferma saltato: input non interattivo.")
         return True
 
     while True:
-        answer = input("Vuoi mantenere questo project code? [Y/n]: ").strip().lower()
+        answer = input("I dati sono corretti? [Y/n]: ").strip().lower()
         if answer in ("", "y", "yes", "s", "si"):
             return True
         if answer in ("n", "no"):
-            print("\nPer cambiarlo puoi:")
-            print(f"1. Modificare `[project] code` in `{SETTINGS_PATH}`")
-            print(
-                '2. Oppure rilanciare da console con: '
-                'python run_mdr_generator.py --project-name "NUOVO_PROJECT_CODE"'
-            )
+            _print_project_settings_help()
             return False
         print("Risposta non valida. Inserisci Y oppure n.")
 
@@ -150,12 +211,19 @@ def _confirm_project_code_or_exit(effective_project: str) -> bool:
 def main() -> int:
     args = _parse_args()
 
+    try:
+        cli_start_date = _parse_cli_start_date(args.project_start_date)
+    except ValueError as e:
+        print(f"ERRORE: {e}", file=sys.stderr)
+        return 1
+    set_project_start_date_override(cli_start_date)
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     json_dir = resolve_json_output_dir(output_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     project = args.project_name
-    if not _confirm_project_code_or_exit(project):
+    if not _confirm_project_settings_or_exit(project, cli_start_date=cli_start_date):
         return 0
     pipeline_started_at = time.perf_counter()
     reset_usage_tracker()
@@ -183,7 +251,10 @@ def main() -> int:
         print(f"LLM pass 2 (gap):   {pass2_provider} / {pass2_model}")
     else:
         print("LLM pass 2 (gap):   disabilitato")
-    print(f"Schedule (Step 5):   {'attivo' if schedule_enabled else 'disabilitato'}")
+    print(
+        f"Schedule (Step 5):   "
+        f"{'attivo (durata, MANHOURS, date)' if schedule_enabled else 'disabilitato'}"
+    )
     print(
         f"Title enrichment (3d): {'attivo (v2 split)' if title_enrichment_enabled else 'disabilitato'}"
     )
@@ -352,47 +423,32 @@ def main() -> int:
         line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
 
-        print("Step 4b: durata da timeline_reconciliation (scheduling)...")
-        duration_map = load_timeline_duration_map(conn)
-        duration_populated = apply_timeline_duration(line_items, duration_map)
-        print(
-            f"  -> {duration_populated}/{len(line_items)} righe con durata timeline (giorni)"
-        )
-
-        print(
-            f"Step 4c: MANHOURS (col. X) = giorni timeline × {HOURS_PER_DURATION_DAY} h/giorno..."
-        )
-        manhours_populated, mh_audit = apply_manhours_from_duration(line_items)
-        save_json(
-            json_dir / "manhours_audit.json",
-            {
-                "hours_per_duration_day": HOURS_PER_DURATION_DAY,
-                "formula": "manhours = round(duration_days * hours_per_duration_day)",
-                **mh_audit,
-            },
-        )
-        print(
-            f"  -> {manhours_populated}/{len(line_items)} righe con MANHOURS "
-            f"({len(line_items) - manhours_populated} senza durata timeline)"
-        )
-
         if schedule_enabled:
-            print("Step 5: scheduling e ordine per predecessor RACI...")
-            line_items, sched_audit = schedule_line_items(
-                conn,
-                line_items,
-                json_dir,
-                enabled=True,
+            print(
+                "Step 5: schedule (durata timeline, MANHOURS, PLANNED FIRST ISSUE, ordine righe)..."
             )
-            schedule_dated_rows = sched_audit.get("scheduled_rows", 0)
+        else:
+            print("Step 5: schedule disabilitato (durata, MANHOURS e date non compilate)...")
+        line_items, sched_audit = run_schedule_pass(
+            conn,
+            line_items,
+            json_dir,
+            enabled=schedule_enabled,
+        )
+        duration_populated = sched_audit.get("duration_populated", 0)
+        manhours_populated = sched_audit.get("manhours_populated", 0)
+        schedule_dated_rows = sched_audit.get("scheduled_rows", 0)
+        if schedule_enabled:
+            print(
+                f"  -> {duration_populated}/{len(line_items)} righe con durata timeline (giorni)"
+            )
+            print(
+                f"  -> {manhours_populated}/{len(line_items)} righe con MANHOURS "
+                f"(× {HOURS_PER_DURATION_DAY} h/giorno)"
+            )
             print(
                 f"  -> {schedule_dated_rows} righe con PLANNED FIRST ISSUE "
                 f"(inizio {sched_audit.get('project_start', '?')})"
-            )
-        else:
-            save_json(
-                json_dir / "schedule_audit.json",
-                {"enabled": False, "reason": "SCHEDULE_ENABLED=false or --no-schedule"},
             )
 
         qa_project = cfg("PROJECT_CODE", project)
