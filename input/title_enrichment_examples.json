@@ -1,73 +1,108 @@
 [
   {
+    "raci_title": "PROCESS DESIGN CRITERIA",
+    "sow_specific_title": "GT2 Condensate Utility",
+    "discipline_code": "PRC",
+    "chapter_name": "DESIGN BASIS, GENERAL SPECIFICATION, DESIGN CRITERIA & PHILOSOPHY",
+    "pattern_note": "J23210 — utility stream dal SoW §6.4.3, senza ripetere 'Process Design Criteria'"
+  },
+  {
+    "raci_title": "PROCESS DESIGN CRITERIA",
+    "sow_specific_title": "GT2 Instrument Air Utility",
+    "discipline_code": "PRC",
+    "chapter_name": "DESIGN BASIS, GENERAL SPECIFICATION, DESIGN CRITERIA & PHILOSOPHY",
+    "pattern_note": "J23210 — split multi-riga stesso RACI per utility distinte"
+  },
+  {
+    "raci_title": "DESIGN BASIS FOR PROCESS AND UTILITY UNIT",
+    "sow_specific_title": "GT2 High-Pressure Steam",
+    "discipline_code": "PRC",
+    "chapter_name": "DESIGN BASIS, GENERAL SPECIFICATION, DESIGN CRITERIA & PHILOSOPHY",
+    "pattern_note": "J23210 — vapore alta pressione §6.4.1, suffisso corto"
+  },
+  {
+    "raci_title": "PIPING CLASSES & STANDARDS",
+    "sow_specific_title": "High Pressure Steam",
+    "discipline_code": "PVV",
+    "chapter_name": "PIPING MATERIAL SPECIFICATIONS",
+    "pattern_note": "J23210 — classe piping §6.5a, senza ripetere 'Piping Classes & Standards'"
+  },
+  {
     "raci_title": "PIPING AND INSTRUMENT DIAGRAMS - PROCESS & UTILITY & DISTRIBUTIONS",
-    "sow_specific_title": "GCS00 Compressor 320-V-1001 Auxiliary Systems P&ID",
+    "sow_specific_title": "New Steam Generation Group - Battery Limits",
     "discipline_code": "PRC",
     "chapter_name": "PIPING & INSTRUMENT DIAGRAMS",
-    "pattern_note": "Codice impianto GCS00 + tag equipment + tipo documento P&ID"
+    "pattern_note": "J23210 — area/impianto SoW, tipo P&ID già nel titolo RACI"
+  },
+  {
+    "raci_title": "PIPING AND INSTRUMENT DIAGRAMS - PROCESS & UTILITY & DISTRIBUTIONS",
+    "sow_specific_title": "GCS00 Compressor 320-V-1001 Auxiliary Systems",
+    "discipline_code": "PRC",
+    "chapter_name": "PIPING & INSTRUMENT DIAGRAMS",
+    "pattern_note": "Codice impianto + tag equipment — senza 'P&ID' nel suffisso"
   },
   {
     "raci_title": "ELECTRICAL CABLE ROUTING AND EQUIPMENT LAYOUT FOR BUILDINGS",
-    "sow_specific_title": "GCS00 Administration Building - 1st floor cable tray routing",
+    "sow_specific_title": "GCS00 Administration Building - 1st floor",
     "discipline_code": "ELE",
     "chapter_name": "BUILDING SERVICES",
-    "pattern_note": "Edificio + piano + sistema (cable trays)"
+    "pattern_note": "Edificio + piano — senza 'cable routing/layout' nel suffisso"
   },
   {
     "raci_title": "GROUNDING AND LIGHTNING PROTECTION LAYOUT FOR BUILDINGS",
-    "sow_specific_title": "GCS00 Compressor Building Unit 3 - GF earthing & lightning",
+    "sow_specific_title": "GCS00 Compressor Building Unit 3 - GF",
     "discipline_code": "ELE",
     "chapter_name": "BUILDING SERVICES",
-    "pattern_note": "Edificio + unità compressore + piano"
+    "pattern_note": "Edificio + unità + piano"
   },
   {
     "raci_title": "HEATING AND COOLING PIPING AND EQUIPMENTS LAYOUTS",
-    "sow_specific_title": "GCS00 E&C Building roof - HVAC piping layout",
+    "sow_specific_title": "GCS00 E&C Building roof",
     "discipline_code": "HVAC",
     "chapter_name": "HVAC & PLBG DRAWINGS",
-    "pattern_note": "Edificio + piano (roof) + sistema HVAC"
+    "pattern_note": "Edificio + piano — senza 'HVAC piping layout' nel suffisso"
   },
   {
     "raci_title": "BUILDING ELECTRICAL SYSTEM - PANEL SINGLE LINE DIAGRAM",
-    "sow_specific_title": "GCS00 Analyser Building - distribution board SLD",
+    "sow_specific_title": "GCS00 Analyser Building",
     "discipline_code": "ELE",
     "chapter_name": "BUILDING SERVICES",
-    "pattern_note": "Edificio + tipo quadro elettrico (SLD)"
+    "pattern_note": "Edificio target — senza 'SLD' nel suffisso"
   },
   {
     "raci_title": "LIGHTING LAYOUT AND DETAILS FOR BUILDINGS",
-    "sow_specific_title": "Compressor Building Unit 3 - GF lighting layout",
+    "sow_specific_title": "Compressor Building Unit 3 - GF",
     "discipline_code": "ELE",
     "chapter_name": "BUILDING SERVICES",
-    "pattern_note": "Edificio + unità + piano + lighting system"
+    "pattern_note": "Edificio + unità + piano"
   },
   {
     "raci_title": "FIREFIGHTING SYSTEM LAYOUT WITH EQUIPMENT DETAILS AND ISOMETRIC VIEW FOR BUILDINGS",
-    "sow_specific_title": "GCS00 Compressor Units 1&2 - firefighting layout",
+    "sow_specific_title": "GCS00 Compressor Units 1&2",
     "discipline_code": "PVV",
     "chapter_name": "BUILDING SERVICES",
-    "pattern_note": "Edificio/units + sistema antincendio"
+    "pattern_note": "Edificio/units — senza 'firefighting layout' nel suffisso"
   },
   {
     "raci_title": "EARTHING / GROUNDING AREA LAYOUT",
-    "sow_specific_title": "GCS00 Compressor Unit 3 - earthing area layout",
+    "sow_specific_title": "GCS00 Compressor Unit 3",
     "discipline_code": "ELE",
     "chapter_name": "EARTHING & LIGHTNING SYSTEM",
-    "pattern_note": "Area/edificio + earthing system"
+    "pattern_note": "Area/edificio — senza 'earthing layout' nel suffisso"
   },
   {
     "raci_title": "PROCESS AND UTILITY FLOW DIAGRAMS",
-    "sow_specific_title": "GCS00 HRS - Process Flow Diagram with H&MB",
+    "sow_specific_title": "GCS00 HRS",
     "discipline_code": "PRC",
     "chapter_name": "H&MB AND PROCESS FLOW DIAGRAM",
-    "pattern_note": "Sistema di processo (HRS) + PFD"
+    "pattern_note": "Sistema di processo — senza 'PFD' nel suffisso"
   },
   {
     "raci_title": "GENERAL PLOT PLAN",
-    "sow_specific_title": "GCS00 Kipi Compressor Station general layout",
+    "sow_specific_title": "GCS00 Kipi Compressor Station",
     "discipline_code": "PVV",
     "chapter_name": "PLANT LAYOUT",
-    "pattern_note": "Codice impianto + facility + general layout"
+    "pattern_note": "Codice impianto + facility — senza 'general layout' nel suffisso"
   },
   {
     "raci_title": "INSPECTION DATA SHEETS FOR CENTRIFUGAL PUMPS FOR PROCESS SERVICE",
@@ -88,7 +123,7 @@
     "sow_specific_title": "SEGEO COOLING WATER CIRCULATING PUMP",
     "discipline_code": "MAC",
     "chapter_name": "CENTRIFUGAL PUMPS FOR PROCESS SERVICE",
-    "pattern_note": "Prefisso train/area (SEGEO) + equipment — coppia split con RTR"
+    "pattern_note": "Prefisso train/area (SEGEO) — coppia split con RTR"
   },
   {
     "raci_title": "TECHNICAL SUPPLY SPECIFICATION FOR CENTRIFUGAL PUMPS FOR PROCESS SERVICE",
@@ -105,13 +140,6 @@
     "pattern_note": "Struttura/edificio + area train (RTR)"
   },
   {
-    "raci_title": "ARCHITECTURAL DRAWINGS FOR BUILDINGS",
-    "sow_specific_title": "AIR UNIT SHELTER SEGEO AREA",
-    "discipline_code": "CIV",
-    "chapter_name": "BUILDINGS",
-    "pattern_note": "Struttura/edificio + area train (SEGEO) — split stesso RACI"
-  },
-  {
     "raci_title": "REINFORCED CONCRETE STRUCTURES AND FOUNDATIONS FOR BUILDINGS - FORMWORK AND REINFORCEMENT DRAWINGS",
     "sow_specific_title": "AIR UNIT SHELTER SEGEO AREA",
     "discipline_code": "CIV",
@@ -126,13 +154,6 @@
     "pattern_note": "Edificio impianto — suffisso corto senza 'lighting layout'"
   },
   {
-    "raci_title": "INSTRUMENTATION CABLE ROUTING LAYOUT WITH SECTIONS IN BUILDINGS",
-    "sow_specific_title": "SEGEO COMPRESSOR BUILDING",
-    "discipline_code": "ICT",
-    "chapter_name": "INSTRUMENTATION CABLES",
-    "pattern_note": "Cable routing — suffisso = edificio target"
-  },
-  {
     "raci_title": "INSPECTION DATA SHEETS FOR HEAT EXCHANGER",
     "sow_specific_title": "WATER COOLER",
     "discipline_code": "MAC",
@@ -145,26 +166,5 @@
     "discipline_code": "MAC",
     "chapter_name": "HEAT EXCHANGERS",
     "pattern_note": "Prefisso RTR + equipment — split train"
-  },
-  {
-    "raci_title": "THERMAL/MECHANICAL DATA SHEET FOR HEAT EXCHANGER",
-    "sow_specific_title": "SEGEO WATER COOLER",
-    "discipline_code": "MAC",
-    "chapter_name": "HEAT EXCHANGERS",
-    "pattern_note": "Prefisso SEGEO + equipment — split train"
-  },
-  {
-    "raci_title": "TECHNICAL SUPPLY SPECIFICATION FOR HEAT EXCHANGER",
-    "sow_specific_title": "WATER COOLER",
-    "discipline_code": "MAC",
-    "chapter_name": "HEAT EXCHANGERS",
-    "pattern_note": "Specifica HX — suffisso equipment only"
-  },
-  {
-    "raci_title": "INSPECTION DATA SHEETS FOR AIR COOLERS FOR PROCESS SERVICE",
-    "sow_specific_title": "GAS AFTER COOLERS",
-    "discipline_code": "MAC",
-    "chapter_name": "AIR COOLERS FOR PROCESS SERVICE",
-    "pattern_note": "Air cooler family — sistema processo, no tag in parentesi"
   }
 ]

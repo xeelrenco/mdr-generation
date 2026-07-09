@@ -145,7 +145,7 @@ def _configured_start_date_label() -> str:
     raw = cfg("PROJECT_START_DATE", "").strip()
     if raw:
         return raw
-    return f"(vuoto → oggi, {date.today().isoformat()})"
+    return f"(vuoto -> oggi, {date.today().isoformat()})"
 
 
 def _print_project_settings_help() -> None:
@@ -181,7 +181,7 @@ def _confirm_project_settings_or_exit(
     if effective_project != configured_project:
         print(
             f"  project code: {configured_project}"
-            f" → questo run userà: {effective_project} (--project-name)"
+            f" -> questo run usera': {effective_project} (--project-name)"
         )
     else:
         print(f"  project code: {configured_project}")
@@ -189,7 +189,7 @@ def _confirm_project_settings_or_exit(
     if cli_start_date is not None:
         print(
             f"  start_date:   {configured_start}"
-            f" → questo run userà: {effective_start.isoformat()} (--project-start-date)"
+            f" -> questo run usera': {effective_start.isoformat()} (--project-start-date)"
         )
     else:
         print(f"  start_date:   {configured_start}")
@@ -406,7 +406,7 @@ def main() -> int:
             print(
                 f"  -> {title_enrichment_audit.get('docs_with_sow', 0)}/"
                 f"{len(in_scope)} doc con titolo SoW; "
-                f"righe {title_enrichment_audit.get('baseline_rows', '?')} → "
+                f"righe {title_enrichment_audit.get('baseline_rows', '?')} -> "
                 f"{title_enrichment_audit.get('final_rows', '?')} "
                 f"(+{title_enrichment_audit.get('extra_rows', 0)} split)"
             )

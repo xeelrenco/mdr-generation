@@ -386,10 +386,13 @@ For EACH catalog document above, output one object:
 
 RULES:
 - Use ONLY title_key values from the catalog list.
-- Each sow_element = ONE distinct asset/building/tag/area/system in the SoW.
+- Each sow_element = ONE distinct asset/building/tag/area/system/utility stream in the SoW.
 - Do NOT invent equipment tags or building names absent from the SoW.
-- Keep the RACI document type in sow_specific_title (Layout, P&ID, Calculation Report, etc.).
-- Prefer plant codes (e.g. GCS00), building names, compressor units, floor levels, equipment tags.
+- sow_specific_title = ONLY the project-specific disambiguator (train e.g. GT2/GCS00, utility stream, building, area, equipment tag or service name).
+- Do NOT repeat words from the RACI title (document type: Layout, P&ID, Data Sheet, Design Criteria, Lists, Philosophy, Specification, etc.).
+- Final MDR display is "RACI | sow_specific_title" — the RACI title already states the document type.
+- Prefer short suffixes (max ~70 chars), e.g. "GT2 Condensate Utility", not "GT2 Condensate Utility Process Design Criteria".
+- Prefer plant codes (e.g. GCS00, GT2), building names, compressor units, floor levels, equipment tags.
 - If SoW does not support a specific title → sow_elements: [] (empty).
 - Do NOT duplicate the same element twice for one document.
 - weak confidence: only when evidence is thin; prefer omitting over guessing.
