@@ -563,7 +563,7 @@ def write_qa_report(
                     r.discipline_code,
                     r.chapter_name,
                     r.raci_title,
-                    r.title_key[:12] + "…" if len(r.title_key) > 12 else r.title_key,
+                    r.title_key,
                     r.historical_count if category != "solo_renco_raci" else "",
                 ]
                 for r in renco.detail_rows

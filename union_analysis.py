@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-Analisi post-hoc: unione MDR di più run vs storico Renco (titoli RACI MATCH).
+Analisi post-hoc: unione MDR di più run vs storico Renco (per TitleKey RACI).
+
+Script standalone — NON fa parte della pipeline run_mdr_generator.py.
+Eseguilo manualmente dopo una o più run, quando vuoi confrontare benchmark LLM.
 
 Legge i fogli MDR_generato e Confronto_Renco dai generation_report.xlsx
-e calcola overlap/gap per singoli run e unioni a coppie.
+(prodotti dallo Step 7) e calcola overlap/gap per singoli run e unioni a coppie.
+Il confronto usa TitleKey RACI, come renco_compare.py — indipendente dall'arricchimento
+titoli (Step 3d) che modifica solo il titolo display.
 
 Usage:
-  python union_analysis.py
-  python union_analysis.py output/7350_*_generation_report.xlsx
-  python union_analysis.py --pair pro+gpt55 flash+gpt55
+  python union_analysis.py report_a.xlsx report_b.xlsx
+  python union_analysis.py output/*_generation_report.xlsx
+  python union_analysis.py --output-dir output --all-pairs
+  python union_analysis.py --pair run1+run2=7350_20260521_172938+7350_20260521_153457
 """
 
 from __future__ import annotations
@@ -26,53 +32,62 @@ from mdr_generator.config import PROJECT_DIR
 CATEGORY_OVERLAP = "Presente in entrambi"
 CATEGORY_RENCO_GAP = "Solo MDR Renco (RACI) — gap di scope"
 
-DEFAULT_RUNS: Dict[str, str] = {
-    "gpt-5.5": "7350_20260521_153457_generation_report.xlsx",
-    "gemini-2.5-pro": "7350_20260521_172938_generation_report.xlsx",
-    "gemini-2.5-flash": "7350_20260521_143528_generation_report.xlsx",
-}
-
-DEFAULT_PAIRS = [
-    ("pro+gpt55", "gemini-2.5-pro", "gpt-5.5"),
-    ("flash+gpt55", "gemini-2.5-flash", "gpt-5.5"),
-]
+MDR_GENERATO_COL_TITLE_KEY = 7
+CONFRONTO_RENCO_COL_TITLE_KEY = 5
 
 
-def _load_generated_titles(report_path: Path) -> Set[str]:
+def _norm_key(raw: object) -> str | None:
+    if raw is None:
+        return None
+    key = str(raw).strip().lower()
+    if not key or key == "—":
+        return None
+    return key
+
+
+def _load_generated_title_keys(report_path: Path) -> Set[str]:
     wb = openpyxl.load_workbook(report_path, read_only=True, data_only=True)
     ws = wb["MDR_generato"]
-    titles = {
-        str(ws.cell(r, 3).value).strip()
-        for r in range(2, ws.max_row + 1)
-        if ws.cell(r, 3).value
-    }
+    keys: Set[str] = set()
+    for r in range(2, ws.max_row + 1):
+        key = _norm_key(ws.cell(r, MDR_GENERATO_COL_TITLE_KEY).value)
+        if key:
+            keys.add(key)
     wb.close()
-    return titles
+    return keys
 
 
-def _section_titles(report_path: Path, section_label: str) -> Set[str]:
+def _section_title_keys(report_path: Path, section_label: str) -> Set[str]:
     wb = openpyxl.load_workbook(report_path, read_only=True, data_only=True)
     ws = wb["Confronto_Renco"]
-    titles: Set[str] = set()
+    keys: Set[str] = set()
     for r in range(1, ws.max_row + 1):
         if str(ws.cell(r, 1).value or "").strip() != section_label:
             continue
-        title_cell = ws.cell(r, 4).value
-        if title_cell:
-            titles.add(str(title_cell).strip())
+        key = _norm_key(ws.cell(r, CONFRONTO_RENCO_COL_TITLE_KEY).value)
+        if key:
+            keys.add(key)
     wb.close()
-    return titles
+    return keys
 
 
-def _load_renco_reference(report_path: Path) -> Set[str]:
-    overlap = _section_titles(report_path, CATEGORY_OVERLAP)
-    gap = _section_titles(report_path, CATEGORY_RENCO_GAP)
+def _load_renco_reference_keys(report_path: Path) -> Set[str]:
+    """Tutti i TitleKey RACI MATCH dello storico: overlap + gap di scope."""
+    overlap = _section_title_keys(report_path, CATEGORY_OVERLAP)
+    gap = _section_title_keys(report_path, CATEGORY_RENCO_GAP)
     return overlap | gap
 
 
 def _stats(generated: Set[str], renco: Set[str]) -> Tuple[int, int, int, int]:
     overlap = generated & renco
     return len(generated), len(overlap), len(renco) - len(overlap), len(generated - renco)
+
+
+def _report_label(path: Path) -> str:
+    name = path.name
+    if name.endswith("_generation_report.xlsx"):
+        return name[: -len("_generation_report.xlsx")]
+    return path.stem
 
 
 def _resolve_reports(
@@ -87,28 +102,35 @@ def _resolve_reports(
                 path = output_dir / path
             if not path.exists():
                 raise FileNotFoundError(path)
-            out[path.stem.split("_generation_report")[0]] = path
+            label = _report_label(path)
+            if label in out:
+                label = f"{label}@{path.parent.name}"
+            out[label] = path
         return out
 
-    out = {}
-    for label, name in DEFAULT_RUNS.items():
-        path = output_dir / name
-        if path.exists():
-            out[label] = path
+    out: Dict[str, Path] = {}
+    paths = sorted(
+        output_dir.glob("*_generation_report.xlsx"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in paths:
+        out[_report_label(path)] = path
     return out
 
 
 def _print_single(label: str, gen: Set[str], renco: Set[str]) -> Tuple[int, int, int, int]:
     mdr, ov, gap, extra = _stats(gen, renco)
     pct = round(100 * ov / len(renco), 1) if renco else 0.0
-    print(f"{label:20} MDR={mdr:4}  overlap={ov:3} ({pct}%)  gap={gap:3}  extra={extra}")
+    print(
+        f"{label:36} keys={mdr:4}  overlap={ov:3} ({pct}%)  "
+        f"gap={gap:3}  extra={extra}"
+    )
     return mdr, ov, gap, extra
 
 
 def _print_union(
     label: str,
-    a_label: str,
-    b_label: str,
     gen_a: Set[str],
     gen_b: Set[str],
     renco: Set[str],
@@ -121,17 +143,19 @@ def _print_union(
     delta = ov - max(ov_a, ov_b)
     shared = len(gen_a & gen_b)
     print(
-        f"{label:20} MDR={mdr:4}  overlap={ov:3} ({pct}%)  gap={gap:3}  "
+        f"{label:36} keys={mdr:4}  overlap={ov:3} ({pct}%)  gap={gap:3}  "
         f"delta=+{delta}  shared={shared}"
     )
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Unione MDR run vs Renco")
+    parser = argparse.ArgumentParser(
+        description="Confronto unioni MDR run vs storico Renco (per TitleKey RACI)"
+    )
     parser.add_argument(
         "reports",
         nargs="*",
-        help="Path report (default: run benchmark 7350 in output/)",
+        help="Path ai generation_report.xlsx (default: tutti in --output-dir)",
     )
     parser.add_argument(
         "--output-dir",
@@ -142,7 +166,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--pair",
         nargs="*",
         metavar="LABEL=A+B",
-        help="Coppie da valutare, es. pro+gpt55=gemini-2.5-pro+gpt-5.5",
+        help="Coppie da valutare, es. pro+gpt=run_a+run_b",
     )
     parser.add_argument(
         "--all-pairs",
@@ -159,14 +183,22 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 1
 
     if len(reports) < 2:
-        print("ERRORE: servono almeno 2 report.", file=sys.stderr)
+        print(
+            "ERRORE: servono almeno 2 generation_report.xlsx "
+            "(passali come argomenti o mettili in --output-dir).",
+            file=sys.stderr,
+        )
         return 1
 
     ref_path = next(iter(reports.values()))
-    renco = _load_renco_reference(ref_path)
-    generated = {label: _load_generated_titles(p) for label, p in reports.items()}
+    renco = _load_renco_reference_keys(ref_path)
+    generated = {label: _load_generated_title_keys(p) for label, p in reports.items()}
 
-    print(f"Riferimento Renco: {len(renco)} titoli RACI (da {ref_path.name})\n")
+    print(
+        f"Riferimento Renco: {len(renco)} TitleKey RACI MATCH "
+        f"(da {ref_path.name})"
+    )
+    print("Confronto per TitleKey — righe split/arricchimento titoli non alterano il match.\n")
     print("=== SINGOLI ===")
     overlaps: Dict[str, int] = {}
     for label in sorted(reports.keys()):
@@ -174,12 +206,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         overlaps[label] = ov
 
     print("\n=== UNIONI ===")
+    union_done = False
     if args.all_pairs:
+        union_done = True
         for a, b in itertools.combinations(sorted(reports.keys()), 2):
             _print_union(
                 f"{a} + {b}",
-                a,
-                b,
                 generated[a],
                 generated[b],
                 renco,
@@ -187,6 +219,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 overlaps[b],
             )
     elif args.pair:
+        union_done = True
         for spec in args.pair:
             if "=" in spec:
                 label, rhs = spec.split("=", 1)
@@ -202,28 +235,26 @@ def main(argv: Iterable[str] | None = None) -> int:
                 return 1
             _print_union(
                 label,
-                a,
-                b,
                 generated[a],
                 generated[b],
                 renco,
                 overlaps[a],
                 overlaps[b],
             )
-    else:
-        for label, a, b in DEFAULT_PAIRS:
-            if a not in generated or b not in generated:
-                continue
-            _print_union(
-                label,
-                a,
-                b,
-                generated[a],
-                generated[b],
-                renco,
-                overlaps[a],
-                overlaps[b],
-            )
+    elif len(reports) == 2:
+        union_done = True
+        a, b = sorted(reports.keys())
+        _print_union(
+            f"{a} + {b}",
+            generated[a],
+            generated[b],
+            renco,
+            overlaps[a],
+            overlaps[b],
+        )
+
+    if not union_done:
+        print("(nessuna unione calcolata: usa --all-pairs o --pair LABEL=A+B)")
 
     return 0
 
