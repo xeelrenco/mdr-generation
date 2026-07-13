@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import sys
 import time
 from datetime import date, datetime
@@ -56,6 +57,9 @@ save_candidates_csv = _im("mdr_generator.3_candidates").save_candidates_csv
 apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ranking
 HOURS_PER_DURATION_DAY = _im("mdr_generator.4_manhours").HOURS_PER_DURATION_DAY
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
+consolidate_normalized_signals = _im(
+    "mdr_generator.2_normalize"
+).consolidate_normalized_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
 recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
 run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_pass
@@ -312,7 +316,7 @@ def main() -> int:
         existing_pairs = {
             (n.discipline_code, n.chapter_name or "") for n in normalized
         }
-        recovered, uncertain, recovery_audit = recover_rejected_pairs(
+        recovered, uncertain, recovery_audit, recovered_raw = recover_rejected_pairs(
             scope_pdfs,
             uncertain,
             vocab,
@@ -321,6 +325,7 @@ def main() -> int:
         )
         if recovered:
             normalized.extend(recovered)
+            raw_signals.extend(recovered_raw)
         save_json(json_dir / "scope_pair_recovery_audit.json", recovery_audit)
         n_ok = sum(1 for a in recovery_audit if a.get("outcome") == "recovered")
         n_dup = sum(1 for a in recovery_audit if a.get("outcome") == "duplicate")
@@ -334,7 +339,7 @@ def main() -> int:
                 "Step 2c: second pass mirato su coppie catalogo RACI "
                 "non ancora estratte..."
             )
-            gap_recovered, gap_pass_audit = run_gap_targeted_pass(
+            gap_recovered, gap_pass_audit, gap_raw = run_gap_targeted_pass(
                 scope_pdfs,
                 conn,
                 vocab,
@@ -343,6 +348,7 @@ def main() -> int:
             )
             if gap_recovered:
                 normalized.extend(gap_recovered)
+                raw_signals.extend(gap_raw)
             save_json(json_dir / "scope_gap_pass_audit.json", gap_pass_audit)
         else:
             save_json(
@@ -353,6 +359,13 @@ def main() -> int:
                 },
             )
 
+        normalized = consolidate_normalized_signals(normalized)
+        if raw_signals:
+            scope_payload: dict = {}
+            if raw_json.exists():
+                scope_payload = json.loads(raw_json.read_text(encoding="utf-8"))
+            scope_payload["signals"] = [s.to_dict() for s in raw_signals]
+            save_json(raw_json, scope_payload)
         save_normalized(normalized, uncertain, norm_json)
 
         print("Step 3a: profili documento (Scalable, timeline, esempi storici)...")

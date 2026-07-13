@@ -12,7 +12,10 @@ from .pair_scope_context import build_pair_sow_context_chunks
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_title_enrichment_prompt
 from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes
-from .title_enrichment_examples import load_title_enrichment_examples
+from .title_enrichment_examples import (
+    load_title_enrichment_examples,
+    select_examples_for_pair,
+)
 from .utils import save_json
 
 _CONFIDENCE_RANK = {"strong": 3, "medium": 2, "weak": 1, "": 0}
@@ -333,7 +336,8 @@ def run_title_enrichment_pass(
 ) -> Tuple[List[DocumentScopeDecision], dict]:
     split_rows = cfg_bool("TITLE_ENRICHMENT_SPLIT_ROWS", default=True)
     max_elements = cfg_int("TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC", 15)
-    examples = load_title_enrichment_examples()
+    max_examples = cfg_int("TITLE_ENRICHMENT_MAX_EXAMPLES", 10)
+    all_examples = load_title_enrichment_examples(max_examples=0)
 
     in_scope = [d for d in decisions if d.in_scope and d.instance_count >= 1]
     baseline_rows = _baseline_row_count(decisions)
@@ -411,9 +415,16 @@ def run_title_enrichment_pass(
             return f"ERROR ({job.pair_audit.get('error', '?')})"
 
         def _job_fn(job: _EnrichmentPairJob):
+            pair_examples = select_examples_for_pair(
+                all_examples,
+                job.pair[0],
+                job.pair[1],
+                [d.raci_title for d in job.decisions],
+                max_examples=max_examples,
+            )
             return _run_enrichment_pair_job(
                 job,
-                examples,
+                pair_examples,
                 model,
                 max_elements=max_elements,
                 split_rows=split_rows,
@@ -449,7 +460,7 @@ def run_title_enrichment_pass(
         "split_rows": split_rows,
         "min_confidence": cfg("TITLE_ENRICHMENT_MIN_CONFIDENCE", "medium"),
         "max_elements_per_doc": max_elements,
-        "examples_loaded": len(examples),
+        "examples_loaded": len(all_examples),
         "baseline_rows": baseline_rows,
         "final_rows": final_rows,
         "extra_rows": max(0, final_rows - baseline_rows),

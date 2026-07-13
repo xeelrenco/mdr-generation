@@ -6,7 +6,7 @@ import importlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .models import NormalizedSignal, UncertainMapping
+from .models import NormalizedSignal, RawScopeSignal, UncertainMapping
 from .raci_vocabulary import RaciVocabulary, build_pair_recovery_prompt
 from .scope_pdf import (
     call_scope_llm_pdf,
@@ -108,10 +108,16 @@ def recover_rejected_pairs(
     vocab: RaciVocabulary,
     existing_pairs: Set[Tuple[str, str]],
     model: Optional[str] = None,
-) -> Tuple[List[NormalizedSignal], List[UncertainMapping], List[Dict[str, Any]]]:
+) -> Tuple[
+    List[NormalizedSignal],
+    List[UncertainMapping],
+    List[Dict[str, Any]],
+    List[RawScopeSignal],
+]:
     pdf_by_name = {p.name: p for p in scope_pdfs}
     pdf_cache: Dict[str, bytes] = {}
     recovered: List[NormalizedSignal] = []
+    recovered_raw: List[RawScopeSignal] = []
     audit: List[Dict[str, Any]] = []
     updated_uncertain: List[UncertainMapping] = []
 
@@ -251,8 +257,6 @@ def recover_rejected_pairs(
             )
             continue
 
-        from .models import RawScopeSignal
-
         raw = RawScopeSignal(
             scope_section=rejection.scope_section,
             discipline_code=disc,
@@ -285,6 +289,7 @@ def recover_rejected_pairs(
             continue
 
         existing_pairs.add(pair)
+        recovered_raw.append(raw)
         recovered.append(
             NormalizedSignal(
                 scope_section=rejection.scope_section,
@@ -312,4 +317,4 @@ def recover_rejected_pairs(
             }
         )
 
-    return recovered, updated_uncertain, audit
+    return recovered, updated_uncertain, audit, recovered_raw

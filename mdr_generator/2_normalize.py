@@ -14,6 +14,8 @@ RECOVERABLE_REASON_PREFIXES = (
     "pair_not_in_catalog",
 )
 
+_CONFIDENCE_RANK = {"strong": 3, "medium": 2, "weak": 1, "": 0}
+
 
 def _uncertain_from_raw(
     raw: RawScopeSignal,
@@ -122,6 +124,73 @@ def _resolve_source_pages(
     return [start], None, extra
 
 
+def _merge_into_normalized(
+    existing: NormalizedSignal,
+    raw: RawScopeSignal,
+    source_pages: List[int],
+) -> None:
+    """Union pages and evidence when Step 1 emits multiple signals for the same pair."""
+    existing.source_pages = sorted(set(existing.source_pages) | set(source_pages))
+    if raw.confidence and _CONFIDENCE_RANK.get(raw.confidence, 0) > _CONFIDENCE_RANK.get(
+        existing.confidence, 0
+    ):
+        existing.confidence = raw.confidence
+    extra = (raw.evidence_quote or raw.notes or "").strip()
+    if extra and extra not in (existing.notes or ""):
+        combined = f"{existing.notes} | {extra}" if existing.notes else extra
+        existing.notes = combined[:500]
+    if raw.scope_section and raw.scope_section not in (existing.scope_section or ""):
+        combined = f"{existing.scope_section}; {raw.scope_section}"
+        existing.scope_section = combined[:200]
+    if "merged_occurrence" not in existing.normalization_method:
+        existing.normalization_method = (
+            f"{existing.normalization_method}+merged_occurrence"
+        )
+
+
+def _merge_normalized_signals(
+    existing: NormalizedSignal,
+    incoming: NormalizedSignal,
+) -> None:
+    """Union pages/evidence when the same pair is added from another pass (e.g. gap 2c)."""
+    existing.source_pages = sorted(
+        set(existing.source_pages) | set(incoming.source_pages)
+    )
+    if _CONFIDENCE_RANK.get(incoming.confidence, 0) > _CONFIDENCE_RANK.get(
+        existing.confidence, 0
+    ):
+        existing.confidence = incoming.confidence
+    extra = (incoming.notes or "").strip()
+    if extra and extra not in (existing.notes or ""):
+        combined = f"{existing.notes} | {extra}" if existing.notes else extra
+        existing.notes = combined[:500]
+    if incoming.scope_section and incoming.scope_section not in (
+        existing.scope_section or ""
+    ):
+        combined = f"{existing.scope_section}; {incoming.scope_section}"
+        existing.scope_section = combined[:200]
+    if incoming.normalization_method not in (existing.normalization_method or ""):
+        existing.normalization_method = (
+            f"{existing.normalization_method}+{incoming.normalization_method}"
+        )
+
+
+def consolidate_normalized_signals(
+    signals: List[NormalizedSignal],
+) -> List[NormalizedSignal]:
+    """One NormalizedSignal per pair with merged pages and evidence."""
+    out: List[NormalizedSignal] = []
+    index: dict[tuple[str, str], int] = {}
+    for sig in signals:
+        key = (sig.discipline_code, sig.chapter_name or "")
+        if key in index:
+            _merge_normalized_signals(out[index[key]], sig)
+        else:
+            index[key] = len(out)
+            out.append(sig)
+    return out
+
+
 def normalize_signals(
     raw_signals: List[RawScopeSignal],
     discipline_codes: Set[str],
@@ -132,10 +201,13 @@ def normalize_signals(
     Accetta solo coppie (discipline_code, chapter_name) presenti nel catalogo
     raci_matrix.v_DocumentsEnriched. Lo stesso capitolo può comparire più volte con discipline
     diverse se l'LLM emette segnali distinti e ogni coppia esiste in catalogo.
+
+    Se Step 1 emette più segnali per la stessa coppia (sezioni/pagine diverse), vengono
+    uniti in un unico NormalizedSignal (union di source_pages ed evidenze).
     """
     normalized: List[NormalizedSignal] = []
     uncertain: List[UncertainMapping] = []
-    seen: set[tuple[str, str]] = set()
+    pair_index: dict[tuple[str, str], int] = {}
 
     for raw in raw_signals:
         method_parts: List[str] = []
@@ -200,10 +272,11 @@ def normalize_signals(
             continue
         method_parts.extend(page_extra)
 
-        if pair in seen:
+        if pair in pair_index:
+            _merge_into_normalized(normalized[pair_index[pair]], raw, source_pages)
             continue
-        seen.add(pair)
 
+        pair_index[pair] = len(normalized)
         normalized.append(
             NormalizedSignal(
                 scope_section=raw.scope_section,

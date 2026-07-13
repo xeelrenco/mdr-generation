@@ -73,25 +73,34 @@ in scope for documentation/deliverables — NOT individual document titles.
 ALLOWED PAIRS — each signal MUST use EXACTLY one row (discipline_code | chapter_name):
 {vocab.pairs_prompt_block()}
 
-For each distinct scope area you find in the PDF, output one object representing ONE
-row from the allowed pairs list above:
+Each signal is one JSON object for ONE allowed pair (discipline_code | chapter_name).
+When a single SoW scope area (section, clause, table, attachment list, numbered item)
+implies documentation/deliverables under MORE THAN ONE allowed pair, output a SEPARATE
+signal for EACH pair you can justify — do not collapse to a single "best" pair if multiple
+chapters genuinely apply to the same excerpt.
+
+Per signal:
 - scope_section: short label (e.g. section heading from the SoW)
 - discipline_code: one allowed code (required — must match the chapter in RACI)
 - chapter_name: one allowed chapter name (required — never null)
 - confidence: "strong" | "medium" | "weak"
 - source_pages: list of 1-based PDF page numbers where the requirement appears
-- evidence_quote: short verbatim quote from the SoW supporting this (max 250 chars)
+- evidence_quote: short verbatim quote from the SoW supporting this pair (max 250 chars)
 - notes: optional audit note
 
 Rules:
 - Read and interpret the full PDF (including scanned pages).
 - Use ONLY pairs from the allowed list — copy discipline_code and chapter_name exactly.
-- The same chapter_name may appear in MULTIPLE signals when different rows apply
-  (e.g. both PRC | MATERIAL SELECTION and PVV | MATERIAL SELECTION if scope covers both).
-- Map SoW wording to the closest allowed pair (e.g. P&ID section -> PRC | PIPING & INSTRUMENT DIAGRAMS).
+- Multi-pair from one excerpt: when the same pages support multiple RACI chapters
+  (e.g. a utility/fluid clause relevant to both summary and design-basis chapters;
+  a commissioning section spanning process and mechanical; an attachment index listing
+  several deliverable types), emit one signal per justified pair with the same or
+  overlapping source_pages. Tailor evidence_quote to why THAT chapter is in scope.
+- The same chapter_name may appear in MULTIPLE signals when different scope areas or
+  disciplines apply (e.g. both PRC | MATERIAL SELECTION and PVV | MATERIAL SELECTION).
 - Do not output a signal with only a discipline and no chapter_name.
-- Do not expand one scope area to all disciplines that share a chapter name — output only
-  the pairs you can justify from the SoW text.
+- Do not emit pairs without SoW evidence — justify each signal from the cited pages.
+- Do not expand one scope area to every pair in the list — only pairs clearly supported.
 - Do not list single MDR document titles.
 - If the PDF does not mention documentation scope, return {{"signals": []}}.
 
@@ -195,19 +204,25 @@ clearly supported in this excerpt:
 The parenthetical examples are generic illustrations of what each chapter covers — they
 are NOT a checklist and do NOT imply those documents are required unless the SoW says so.
 
-For each pair you confirm, output one object:
+For each candidate pair you confirm in this excerpt, output a separate signal object.
+When the same pages support multiple candidate pairs, emit one signal per pair
+(same or overlapping source_pages; tailor evidence_quote to each chapter).
+
+Per signal:
 - scope_section: short label from the SoW section
 - discipline_code: EXACT code from the candidate pair
 - chapter_name: EXACT chapter from the candidate pair
 - confidence: "strong" | "medium" | "weak"
 - source_pages: list of GLOBAL 1-based PDF page numbers within {page_start}–{page_end}
-- evidence_quote: verbatim quote supporting the pair (max 250 chars)
+- evidence_quote: verbatim quote supporting this pair (max 250 chars)
 - notes: optional
 
 RULES:
 - This upload covers global pages {page_start}–{page_end} of {total_pages} total pages.
 - Output ONLY pairs from the CANDIDATE list above — do not invent other pairs.
 - Do not report a pair without explicit SoW evidence in this excerpt.
+- If one SoW section supports multiple candidate pairs, output multiple signals — do not
+  stop after the first match when others are equally justified.
 - Pay special attention to ICT/control systems, electrical, instrumentation, telecom.
 - If none of the candidate pairs are supported in this excerpt, return {{"signals": []}}.
 
@@ -232,7 +247,7 @@ def build_scope_pdf_chunk_repass_prompt(
         f"- Do NOT reference content from other parts of the document; if unsure, return "
         f'{{"signals": []}}.\n'
         f"- Look for documentation/deliverable obligations explicitly stated in these pages.\n"
-        f"- Map each finding to EXACTLY one allowed pair from the list.\n"
+        f"- Emit every allowed pair justified by the excerpt (one signal per pair).\n"
         f"- Prefer strong/medium confidence only when the SoW text clearly supports the pair; "
         f"do not guess generic pairs (LIST, OPERATING MANUAL, SCADA) without explicit evidence.\n"
         f"- If this excerpt truly contains no documentation scope, return {{\"signals\": []}}.\n"
@@ -366,8 +381,9 @@ List sow_elements evident ONLY in this part.
     return f"""You analyze Scope of Work (SoW) excerpts for an EPC/engineering project.
 
 The RACI pair {discipline_code} | {chapter_name} is confirmed in project scope.
-Each catalog document below may map to ONE OR MORE distinct MDR rows when the SoW lists
-separate buildings, units, equipment tags, areas, or systems.
+Each catalog document below may map to ONE OR MORE distinct MDR rows when the SoW
+enumerates separate items at a compatible scope (buildings, units, areas, trains,
+utility/service systems, equipment tags, packages, battery limits, etc.).
 {part_note}
 SOW CONTEXT:
 {sow_context}
@@ -386,14 +402,65 @@ For EACH catalog document above, output one object:
 
 RULES:
 - Use ONLY title_key values from the catalog list.
-- Each sow_element = ONE distinct asset/building/tag/area/system/utility stream in the SoW.
-- Do NOT invent equipment tags or building names absent from the SoW.
-- sow_specific_title = ONLY the project-specific disambiguator (train e.g. GT2/GCS00, utility stream, building, area, equipment tag or service name).
-- Do NOT repeat words from the RACI title (document type: Layout, P&ID, Data Sheet, Design Criteria, Lists, Philosophy, Specification, etc.).
-- Final MDR display is "RACI | sow_specific_title" — the RACI title already states the document type.
-- Prefer short suffixes (max ~70 chars), e.g. "GT2 Condensate Utility", not "GT2 Condensate Utility Process Design Criteria".
-- Prefer plant codes (e.g. GCS00, GT2), building names, compressor units, floor levels, equipment tags.
-- If SoW does not support a specific title → sow_elements: [] (empty).
+
+GRANULARITY (split vs single):
+- When the SoW enumerates multiple distinct items in a list/table (numbered items, bullets, rows a/b/c…),
+  output ONE sow_element per listed item — never collapse the whole list into one generic label.
+- Use the same granularity as the SoW enumeration: if the SoW names separate utility systems,
+  buildings, trains, or equipment, each name is a separate element.
+- A generic facility or project label alone (e.g. "Compressor Station", "Train 2", "New Unit")
+  is valid ONLY when the SoW does not break down finer items for that document.
+
+MATCH RACI DOCUMENT SCOPE to SoW evidence (use the matching SoW excerpt type only):
+
+PLANT-WIDE PROCESS DOCS (titles containing Design Criteria, Design Basis, Philosophy,
+Piping Classes, Material Specification, Utility — typically chapter DESIGN BASIS / PROCESS):
+- Source ONLY from SoW utility/service/fluid enumerations (steam, condensate, instrument air,
+  seawater, fuel gas, cooling water, etc.) or train/area + utility name when the SoW lists
+  per-train utilities.
+- Do NOT use: building names, floors, "outdoor equipment", installation/site area names,
+  control-room/panel locations, or main equipment tags (e.g. "Steam Generator GT2") as suffix.
+- If the SoW has both a utility list AND a building/equipment list, use the utility list.
+- When several plant-wide process RACI titles appear in the same pair (e.g. PROCESS DESIGN
+  CRITERIA and DESIGN BASIS FOR PROCESS), use the SAME utility enumeration for each — do not
+  switch to buildings, layout, or equipment sections for sibling documents.
+
+EQUIPMENT TAG vs UTILITY:
+- When the SoW names a major equipment item (generator, turbine, compressor) AND separately
+  lists utility/service systems, plant-wide process docs take the UTILITY names, not the
+  equipment tag. Equipment tags belong to equipment-family or diagram RACI titles only.
+
+BUILDING / AREA LAYOUT RACI (titles containing Building, FOR BUILDINGS, Lighting Layout):
+- Prefer building name, unit, floor/level, area, shelter — from building/room lists in the SoW.
+
+EQUIPMENT-FAMILY RACI (data sheets, inspection sheets, specs for pumps/HX/compressors):
+- Prefer equipment tag, service name, or train/area + equipment family.
+
+DIAGRAM RACI (P&ID, PFD, SLD, flow diagrams):
+- Prefer battery limit, system, package, area, or equipment tag — whichever the SoW uses.
+
+SoW SECTION ROUTING:
+- Utility/fluid tables or numbered service lists → plant-wide process docs, piping classes.
+- Building/level/room lists → building layout RACI only.
+- Equipment tags / pump names → data sheets, inspection sheets, equipment specs.
+- Battery limits / systems / packages → P&ID, PFD, diagram RACI.
+- If evidence_quote would come from the wrong section type for the RACI title, omit the element.
+
+SUFFIX CONTENT (sow_specific_title):
+- ONLY the project-specific disambiguator; max ~70 chars; English preferred.
+- Do NOT repeat words from the RACI title (document type: Layout, P&ID, Data Sheet, Design Criteria,
+  Lists, Philosophy, Specification, Drawing, Manual, Classes, Basis, etc.).
+- Final MDR display is "RACI | sow_specific_title" — the RACI side already names the document type.
+- Include train/area/plant codes, equipment tags, or building names when the SoW provides them
+  AND they match the RACI document scope (see rules above).
+- Prefer the specific named item from the SoW over paraphrasing or inventing broader labels.
+- Before finalizing, strip any word that duplicates the RACI title; if only doc-type words remain,
+  re-read the SoW for a shorter disambiguator at the correct scope.
+
+EVIDENCE & QUALITY:
+- Do NOT invent tags, buildings, or systems absent from the SoW.
+- evidence_quote must support the element (verbatim excerpt, max 250 chars).
+- If SoW does not support a specific title for a catalog document → sow_elements: [].
 - Do NOT duplicate the same element twice for one document.
 - weak confidence: only when evidence is thin; prefer omitting over guessing.
 

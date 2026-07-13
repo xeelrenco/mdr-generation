@@ -10,7 +10,7 @@ import duckdb
 
 from .config import cfg_bool, cfg_int
 from .db import DOCUMENTS_ENRICHED_VIEW
-from .models import NormalizedSignal
+from .models import NormalizedSignal, RawScopeSignal
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import RaciVocabulary, build_gap_targeted_pass_prompt
 from .scope_pdf import (
@@ -128,9 +128,9 @@ def run_gap_targeted_pass(
     vocab: RaciVocabulary,
     existing_pairs: Set[Tuple[str, str]],
     model: Optional[str] = None,
-) -> Tuple[List[NormalizedSignal], Dict[str, Any]]:
+) -> Tuple[List[NormalizedSignal], Dict[str, Any], List[RawScopeSignal]]:
     if not cfg_bool("SCOPE_PASS2_ENABLED", default=False):
-        return [], {"enabled": False}
+        return [], {"enabled": False}, []
 
     pass2_provider, pass2_model = resolve_scope_llm_config(
         "pass2", cli_model=model
@@ -156,11 +156,12 @@ def run_gap_targeted_pass(
     if not missing:
         print("  Step 2c: nessuna coppia catalogo da cercare — pass 2 saltato")
         audit["recovered_count"] = 0
-        return [], audit
+        return [], audit, []
 
     pending: Set[Tuple[str, str]] = set(missing)
     pair_examples = _fetch_catalog_pair_examples(conn, missing)
     recovered: List[NormalizedSignal] = []
+    recovered_raw: List[RawScopeSignal] = []
     chunk_enabled, chunk_pages, overlap = _pass2_chunk_settings()
 
     print(
@@ -230,6 +231,7 @@ def run_gap_targeted_pass(
                 pending.discard(pair)
                 existing_pairs.add(pair)
                 recovered.append(normalized)
+                recovered_raw.append(raw)
                 found_pairs.append(f"{pair[0]}|{pair[1]}")
 
             audit["runs"].append(
@@ -253,4 +255,4 @@ def run_gap_targeted_pass(
         f"  -> gap pass: {len(recovered)} coppie recuperate,"
         f" {len(pending)} ancora mancanti"
     )
-    return recovered, audit
+    return recovered, audit, recovered_raw

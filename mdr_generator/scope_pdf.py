@@ -674,12 +674,24 @@ def _merge_chunk_signals(
     signals: List[RawScopeSignal],
     seen: Set[tuple[str, str, Optional[str]]],
     out: List[RawScopeSignal],
+    out_index: Optional[Dict[tuple[str, str, Optional[str]], int]] = None,
 ) -> None:
+    index = out_index if out_index is not None else {}
     for sig in signals:
         key = (sig.discipline_code, sig.chapter_name, sig.scope_section)
         if key in seen:
+            if key in index:
+                existing = out[index[key]]
+                existing.source_pages = sorted(
+                    set(existing.source_pages) | set(sig.source_pages)
+                )
+                extra = (sig.evidence_quote or sig.notes or "").strip()
+                if extra and extra not in (existing.evidence_quote or ""):
+                    combined = f"{existing.evidence_quote} | {extra}"
+                    existing.evidence_quote = combined[:250]
             continue
         seen.add(key)
+        index[key] = len(out)
         out.append(sig)
 
 
@@ -698,6 +710,7 @@ def _extract_scope_chunked(
     ranges = _chunk_page_ranges(total_pages, chunk_pages, overlap)
 
     seen: Set[tuple[str, str, Optional[str]]] = set()
+    signal_index: Dict[tuple[str, str, Optional[str]], int] = {}
     all_signals: List[RawScopeSignal] = []
     runs: List[Dict[str, Any]] = []
     workers = llm_parallel_workers()
@@ -743,7 +756,7 @@ def _extract_scope_chunked(
 
     for job, chunk_signals in sorted(primary_results, key=lambda x: x[0].idx):
         chunk_signals_by_idx[job.idx] = chunk_signals
-        _merge_chunk_signals(chunk_signals, seen, all_signals)
+        _merge_chunk_signals(chunk_signals, seen, all_signals, signal_index)
 
         if not repass_enabled or chunk_signals:
             continue
@@ -777,7 +790,7 @@ def _extract_scope_chunked(
         )
         for job, repass_signals in sorted(repass_results, key=lambda x: x[0].idx):
             repass_signals_by_idx[job.idx] = repass_signals
-            _merge_chunk_signals(repass_signals, seen, all_signals)
+            _merge_chunk_signals(repass_signals, seen, all_signals, signal_index)
 
     for idx, (page_start, page_end) in enumerate(ranges):
         chunk_signals = chunk_signals_by_idx.get(idx, [])
