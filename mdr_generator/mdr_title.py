@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-DISPLAY_TITLE_SEPARATOR = " | "
+TITLE_SEPARATOR = " | "
+DISPLAY_TITLE_SEPARATOR = TITLE_SEPARATOR
 
 
 def _clean_instance_label(label: str, index: int) -> str:
@@ -24,13 +25,15 @@ def format_mdr_title(
     raci_title: str,
     instance_index: Optional[int],
     instance_label: str = "",
+    *,
+    separator: str = TITLE_SEPARATOR,
 ) -> str:
     """
     RACI catalog title with optional instance suffix (no SoW part).
     - index None or <=0: raci_title only
-    - meaningful label: '{title} - {label}' (no index number)
+    - meaningful label: '{title} | {label}' (no index number)
     - index == 1 with no label: raci_title only
-    - otherwise: '{title} - {n}'
+    - otherwise: '{title} | {n}'
     """
     base = (raci_title or "").strip()
     if not base:
@@ -39,10 +42,10 @@ def format_mdr_title(
         return base
     label = _clean_instance_label(instance_label, instance_index or 0)
     if label:
-        return f"{base} - {label}"
+        return f"{base}{separator}{label}"
     if instance_index == 1:
         return base
-    return f"{base} - {instance_index}"
+    return f"{base}{separator}{instance_index}"
 
 
 def format_mdr_display_title(
@@ -51,13 +54,15 @@ def format_mdr_display_title(
     instance_label: str = "",
     sow_specific_title: Optional[str] = None,
     *,
-    separator: str = DISPLAY_TITLE_SEPARATOR,
+    separator: str = TITLE_SEPARATOR,
 ) -> str:
-    """Col B: RACI | SoW when enriched; else RACI - label or RACI - n if needed."""
+    """Col B: RACI | suffix — SoW-specific part (3d) or instance label/count (3b)."""
     specific = (sow_specific_title or "").strip()
     if specific:
         base = (raci_title or "").strip()
         if not base:
             return specific
         return f"{base}{separator}{specific}"
-    return format_mdr_title(raci_title, instance_index, instance_label)
+    return format_mdr_title(
+        raci_title, instance_index, instance_label, separator=separator
+    )

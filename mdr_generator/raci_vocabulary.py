@@ -450,7 +450,7 @@ SUFFIX CONTENT (sow_specific_title):
 - ONLY the project-specific disambiguator; max ~70 chars; English preferred.
 - Do NOT repeat words from the RACI title (document type: Layout, P&ID, Data Sheet, Design Criteria,
   Lists, Philosophy, Specification, Drawing, Manual, Classes, Basis, etc.).
-- Final MDR display is "RACI | sow_specific_title" — the RACI side already names the document type.
+- Final MDR display is always "RACI | suffix" (pipe separator) — the RACI side already names the document type.
 - Include train/area/plant codes, equipment tags, or building names when the SoW provides them
   AND they match the RACI document scope (see rules above).
 - Prefer the specific named item from the SoW over paraphrasing or inventing broader labels.
