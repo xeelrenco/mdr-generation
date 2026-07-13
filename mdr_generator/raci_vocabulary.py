@@ -64,6 +64,16 @@ def load_raci_vocabulary(conn: duckdb.DuckDBPyConnection) -> RaciVocabulary:
     )
 
 
+_MDR_SUFFIX_LANGUAGE_RULES = """LANGUAGE (MDR title suffix fields: label, sow_specific_title):
+- Write ALL generated suffix text in English.
+- If the SoW names an item in Italian or another language, translate it to standard engineering
+  English for the suffix — do not copy non-English prose into label or sow_specific_title.
+- Keep unchanged: equipment tags, line/fluid codes, plant or facility codes, numeric identifiers,
+  and standard acronyms (e.g. P-7506/B, GCS00, 41F, ITP, ATEX).
+- evidence_quote stays verbatim in the source language; translation applies only to suffix fields.
+- Historical or few-shot examples illustrate scope/granularity only — suffix language is always English."""
+
+
 def build_scope_pdf_prompt(vocab: RaciVocabulary) -> str:
     return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
@@ -308,7 +318,8 @@ For EACH catalog document above, output one object:
 {count_field}
 - instances: list of {{index, label}} when instance_count > 1
   - index: 1..instance_count
-  - label: optional meaningful text from SoW (area, equipment tag, building); empty if none
+  - label: optional meaningful English disambiguator from SoW (area, equipment tag, building);
+    translate to English if the SoW text is not in English; empty if none
 - evidence_quote: short quote supporting the count (max 250 chars); empty if instance_count=0
 - source_pages: 1-based PDF page numbers from the context above
 
@@ -317,6 +328,8 @@ RULES:
 {count_rule}
 - Do not output documents not in the catalog list.
 - label must not be generic like "NUM 2" only — leave empty if no meaningful suffix.
+
+{_MDR_SUFFIX_LANGUAGE_RULES}
 
 Respond with JSON only:
 {{"documents": [...]}}
@@ -366,7 +379,7 @@ def build_title_enrichment_prompt(
     if examples:
         ex_lines = [ex.to_prompt_block() for ex in examples]
         examples_block = (
-            "\n\nEXAMPLES (historical MDR style — one SoW-specific title per element):\n"
+            "\n\nEXAMPLES (historical MDR style — granularity and suffix pattern; English required):\n"
             + "\n".join(ex_lines)
         )
 
@@ -395,13 +408,15 @@ CATALOG DOCUMENTS IN SCOPE (TitleKey | RACI Title):
 For EACH catalog document above, output one object:
 - title_key: exact TitleKey from the list
 - sow_elements: list of 0..{max_elements} distinct elements from the SoW:
-  - label: short disambiguator (building name, unit, tag, area); optional
-  - sow_specific_title: project-specific MDR description (max 120 chars, English preferred)
+  - label: short English disambiguator (building name, unit, tag, area); optional; translate if needed
+  - sow_specific_title: project-specific MDR description (max 120 chars, English required)
   - confidence: "strong" | "medium" | "weak"
   - evidence_quote: verbatim SoW quote (max 250 chars)
 
 RULES:
 - Use ONLY title_key values from the catalog list.
+
+{_MDR_SUFFIX_LANGUAGE_RULES}
 
 GRANULARITY (split vs single):
 - When the SoW enumerates multiple distinct items in a list/table (numbered items, bullets, rows a/b/c…),
@@ -447,13 +462,13 @@ SoW SECTION ROUTING:
 - If evidence_quote would come from the wrong section type for the RACI title, omit the element.
 
 SUFFIX CONTENT (sow_specific_title):
-- ONLY the project-specific disambiguator; max ~70 chars; English preferred.
+- ONLY the project-specific disambiguator; max ~70 chars; English required.
 - Do NOT repeat words from the RACI title (document type: Layout, P&ID, Data Sheet, Design Criteria,
   Lists, Philosophy, Specification, Drawing, Manual, Classes, Basis, etc.).
 - Final MDR display is always "RACI | suffix" (pipe separator) — the RACI side already names the document type.
 - Include train/area/plant codes, equipment tags, or building names when the SoW provides them
   AND they match the RACI document scope (see rules above).
-- Prefer the specific named item from the SoW over paraphrasing or inventing broader labels.
+- Prefer the specific named item from the SoW (in English) over paraphrasing or inventing broader labels.
 - Before finalizing, strip any word that duplicates the RACI title; if only doc-type words remain,
   re-read the SoW for a shorter disambiguator at the correct scope.
 
