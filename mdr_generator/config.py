@@ -75,6 +75,7 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
 
     schedule = data.get("schedule") or {}
     set_key("SCHEDULE_ENABLED", schedule.get("enabled", False))
+    set_key("SCHEDULE_DEBUG_COLUMNS", schedule.get("debug_columns", False))
 
     parallel = data.get("parallel") or {}
     set_key("LLM_PARALLEL_WORKERS", parallel.get("llm_workers", 8))

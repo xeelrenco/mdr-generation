@@ -8,3 +8,4 @@ input/*
 !input/title_enrichment_examples.json
 !input/Master Document Register Template.xlsx
 credentials/
+.cursor/rules/

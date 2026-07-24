@@ -246,6 +246,9 @@ def main() -> int:
         "pass2", cli_model=args.scope_pass2_llm_model
     )
     schedule_enabled = cfg_bool("SCHEDULE_ENABLED", default=False) and not args.no_schedule
+    schedule_debug_columns = schedule_enabled and cfg_bool(
+        "SCHEDULE_DEBUG_COLUMNS", default=False
+    )
     title_enrichment_enabled = cfg_bool(
         "TITLE_ENRICHMENT_ENABLED", default=True
     ) and not args.no_title_enrichment
@@ -258,6 +261,7 @@ def main() -> int:
     print(
         f"Schedule (Step 5):   "
         f"{'attivo (durata, MANHOURS, date)' if schedule_enabled else 'disabilitato'}"
+        f"{' + debug columns' if schedule_debug_columns else ''}"
     )
     print(
         f"Title enrichment (3d): {'attivo (v2 split)' if title_enrichment_enabled else 'disabilitato'}"
@@ -498,8 +502,12 @@ def main() -> int:
             line_items,
             project_code=project,
             discipline_short_codes=discipline_short_codes,
+            schedule_debug_columns=schedule_debug_columns,
+            project_start=resolve_project_start_date() if schedule_enabled else None,
         )
         print(f"  -> {mdr_path}")
+        if schedule_debug_columns:
+            print("  -> colonne DBG_* schedule attive (AJ+)")
 
     elapsed_seconds = time.perf_counter() - pipeline_started_at
     elapsed_label = format_elapsed_seconds(elapsed_seconds)

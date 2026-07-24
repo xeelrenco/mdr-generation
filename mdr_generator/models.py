@@ -143,6 +143,12 @@ class MdrLineItem:
     planned_start: Optional[date] = None
     planned_finish: Optional[date] = None
     schedule_sort_key: Optional[int] = None
+    # Schedule debug (populated when schedule.debug_columns=true)
+    schedule_debug_pred_keys: str = ""
+    schedule_debug_pred_finishes: str = ""
+    schedule_debug_driving_pred: str = ""
+    schedule_debug_flags: str = ""
+    schedule_debug_missing_preds: str = ""
     selection_reason: str = ""
     bucket: str = "without_history"
     decision_source: str = ""
