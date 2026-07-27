@@ -32,18 +32,20 @@ COL_WORKFLOW = 27  # AA
 COL_PLANNED_FIRST_ISSUE = 29  # AC — PLANNED FIRST ISSUE (AD non compilata per ora)
 # Schedule debug columns (only when schedule.debug_columns=true) — after AI (col 35)
 COL_DBG_FIRST = 36  # AJ
+SCHEDULE_DEBUG_META_ROW = 12  # project start once, above DBG column headers
 SCHEDULE_DEBUG_HEADERS = [
     "DBG_TitleKey",
-    "DBG_DurationDays",
-    "DBG_DurationSource",
-    "DBG_ProjectStart",
     "DBG_PredFinishes",
     "DBG_DrivingPred",
+    "DBG_PlannedStart",
+    "DBG_DurationDays",
     "DBG_PlannedFinish",
-    "DBG_ScheduleRank",
     "DBG_MissingPreds",
     "DBG_Flags",
 ]
+# Offsets within SCHEDULE_DEBUG_HEADERS for date-formatted cells.
+_DBG_COL_PLANNED_START = 3
+_DBG_COL_PLANNED_FINISH = 5
 FILTER_HEADER_ROW = 13
 FILTER_FIRST_COL = "A"
 FILTER_LAST_COL = "AI"  # col 35 — KBS INTERNAL CODE
@@ -133,16 +135,22 @@ def _write_date_cell(ws: Worksheet, row: int, column: int, value: Optional[date]
     cell.number_format = DATE_NUMBER_FORMAT
 
 
-def _apply_mdr_auto_filter(ws: Worksheet, last_data_row: int) -> None:
-    """Filtri Excel su riga 13 e dati sotto (A13:AI).
+def _apply_mdr_auto_filter(
+    ws: Worksheet,
+    last_data_row: int,
+    *,
+    last_col: str = FILTER_LAST_COL,
+) -> None:
+    """Filtri Excel su riga 13 e dati sotto (A13:last_col).
 
     B13:F13 e' un'intestazione unita: mostra un solo filtro sulla colonna B;
     nasconde i pulsante filtro su C-F (colId 2-5 rispetto ad A).
+    Se last_col va oltre AI (es. colonne DBG_*), i filtri includono anche quelle.
     """
     if last_data_row < FILTER_HEADER_ROW:
         last_data_row = FILTER_HEADER_ROW
     ws.auto_filter.ref = (
-        f"{FILTER_FIRST_COL}{FILTER_HEADER_ROW}:{FILTER_LAST_COL}{last_data_row}"
+        f"{FILTER_FIRST_COL}{FILTER_HEADER_ROW}:{last_col}{last_data_row}"
     )
     ws.auto_filter.filterColumn.clear()
     first_col_idx = ws[FILTER_FIRST_COL + "1"].column
@@ -156,8 +164,32 @@ def _apply_mdr_auto_filter(ws: Worksheet, last_data_row: int) -> None:
         )
 
 
-def _write_schedule_debug_header(ws: Worksheet) -> None:
-    from openpyxl.styles import Font
+def _schedule_debug_last_col() -> str:
+    return get_column_letter(COL_DBG_FIRST + len(SCHEDULE_DEBUG_HEADERS) - 1)
+
+
+def _write_schedule_debug_header(
+    ws: Worksheet,
+    *,
+    project_start: Optional[date],
+) -> None:
+    from openpyxl.styles import Alignment, Font
+
+    last_dbg_col = COL_DBG_FIRST + len(SCHEDULE_DEBUG_HEADERS) - 1
+    if project_start is not None:
+        meta = (
+            f"DBG — Project start: {project_start.isoformat()} "
+            f"(PLANNED FIRST ISSUE col. AC when no predecessor shift)"
+        )
+        ws.merge_cells(
+            start_row=SCHEDULE_DEBUG_META_ROW,
+            start_column=COL_DBG_FIRST,
+            end_row=SCHEDULE_DEBUG_META_ROW,
+            end_column=last_dbg_col,
+        )
+        meta_cell = ws.cell(row=SCHEDULE_DEBUG_META_ROW, column=COL_DBG_FIRST, value=meta)
+        meta_cell.font = Font(bold=True, italic=True)
+        meta_cell.alignment = Alignment(horizontal="left", vertical="center")
 
     header_font = Font(bold=True)
     for offset, header in enumerate(SCHEDULE_DEBUG_HEADERS):
@@ -165,31 +197,26 @@ def _write_schedule_debug_header(ws: Worksheet) -> None:
         cell.font = header_font
 
 
-def _write_schedule_debug_row(
-    ws: Worksheet,
-    row: int,
-    doc: MdrLineItem,
-    *,
-    project_start: Optional[date],
-) -> None:
-    values = [
+def _write_schedule_debug_row(ws: Worksheet, row: int, doc: MdrLineItem) -> None:
+    values: list = [
         doc.raci_title_key,
-        doc.duration_days if doc.duration_days is not None else "",
-        doc.duration_source or "",
-        project_start.isoformat() if project_start else "",
         doc.schedule_debug_pred_finishes,
         doc.schedule_debug_driving_pred,
-        doc.planned_finish.isoformat() if doc.planned_finish else "",
-        doc.schedule_sort_key if doc.schedule_sort_key is not None else "",
+        doc.planned_start,
+        doc.duration_days if doc.duration_days is not None else "",
+        doc.planned_finish,
         doc.schedule_debug_missing_preds,
         doc.schedule_debug_flags,
     ]
     for offset, value in enumerate(values):
-        ws.cell(
-            row=row,
-            column=COL_DBG_FIRST + offset,
-            value=safe_excel_value(value) if value != "" else None,
-        )
+        col = COL_DBG_FIRST + offset
+        if value == "" or value is None:
+            continue
+        if offset in (_DBG_COL_PLANNED_START, _DBG_COL_PLANNED_FINISH):
+            if isinstance(value, date):
+                _write_date_cell(ws, row, col, value)
+            continue
+        ws.cell(row=row, column=col, value=safe_excel_value(value))
 
 
 def write_mdr_excel(
@@ -218,7 +245,7 @@ def write_mdr_excel(
     tpl_wb.close()
 
     if schedule_debug_columns:
-        _write_schedule_debug_header(ws)
+        _write_schedule_debug_header(ws, project_start=project_start)
 
     proj = (project_code or "").strip() or "0000"
     pair_progress: Dict[tuple[str, str], int] = {}
@@ -247,12 +274,13 @@ def write_mdr_excel(
                 ws.cell(row=row, column=COL_MANHOURS, value=doc.manhours)
             _write_date_cell(ws, row, COL_PLANNED_FIRST_ISSUE, doc.planned_start)
             if schedule_debug_columns:
-                _write_schedule_debug_row(
-                    ws, row, doc, project_start=project_start or doc.planned_start
-                )
+                _write_schedule_debug_row(ws, row, doc)
 
     last_data_row = DATA_START_ROW + len(documents) - 1 if documents else FILTER_HEADER_ROW
-    _apply_mdr_auto_filter(ws, last_data_row)
+    filter_last = (
+        _schedule_debug_last_col() if schedule_debug_columns else FILTER_LAST_COL
+    )
+    _apply_mdr_auto_filter(ws, last_data_row, last_col=filter_last)
 
     wb.properties.title = proj
     wb.save(output_path)

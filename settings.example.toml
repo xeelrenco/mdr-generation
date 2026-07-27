@@ -45,7 +45,7 @@ gemini_model = "gemini-2.5-pro"
 
 [schedule]
 enabled = true  # controlla durata timeline, MANHOURS (col. X) e PLANNED FIRST ISSUE (col. AC)
-debug_columns = false  # se true: colonne DBG_* sull'MDR (dopo AI) per audit date/predecessor
+debug_columns = false  # se true: colonne DBG_* sull'MDR (AJ+, riga 12 = project start)
 
 [parallel]
 llm_workers = 15
