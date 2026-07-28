@@ -10,6 +10,8 @@ Checklist di decisioni aperte sul generatore MDR. Aggiornare quando Renco rispon
 
 **Comportamento attuale:** se un predecessore è presente nell’MDR ma non ha `duration_days` dalla timeline reconciliation, non ritarda il successore — il suo `finish` coincide con lo `start`, quindi non sposta la data di inizio del documento dipendente.
 
+**Visibilità debug:** sul successore, `DBG_Flags` include `pred_no_duration` e `DBG_PredFinishes` annota i pred con `[no_duration]`. Sul predecessore resta il flag `no_duration`.
+
 **Da chiedere:** è accettabile, oppure un predecessore senza durata dovrebbe comunque bloccare il successore (es. usando una durata minima di default, o segnalando errore)?
 
 **Riferimento codice:** `mdr_generator/5_schedule.py` — calcolo `pred_finish_pairs` e `finish_by_key`.

@@ -103,14 +103,22 @@ def _clear_planning_fields(line_items: List[MdrLineItem]) -> None:
         item.schedule_debug_missing_preds = ""
 
 
-def _format_pred_finishes(pairs: List[Tuple[str, date]]) -> str:
-    return "; ".join(f"{k}→{f.isoformat()}" for k, f in pairs)
+def _format_pred_finishes(
+    pairs: List[Tuple[str, date]],
+    no_duration_keys: Set[str],
+) -> str:
+    parts: List[str] = []
+    for key, finish in pairs:
+        marker = "[no_duration]" if key in no_duration_keys else ""
+        parts.append(f"{key}→{finish.isoformat()}{marker}")
+    return "; ".join(parts)
 
 
 def _driving_predecessor(
     project_start: date,
     item_start: date,
     pred_finish_pairs: List[Tuple[str, date]],
+    no_duration_keys: Set[str],
 ) -> str:
     """Pick the predecessor that sets item_start; on ties, first alphabetical."""
     if not pred_finish_pairs:
@@ -118,7 +126,19 @@ def _driving_predecessor(
     max_finish = max(f for _, f in pred_finish_pairs)
     if max_finish > project_start and item_start == max_finish:
         drivers = sorted(k for k, f in pred_finish_pairs if f == max_finish)
-        return f"{drivers[0]} finish={max_finish.isoformat()}"
+        driver = drivers[0]
+        marker = "[no_duration]" if driver in no_duration_keys else ""
+        return f"{driver} finish={max_finish.isoformat()}{marker}"
+    # Finish collapsed to project_start (typical when driving pred has no duration).
+    tied_at_start = sorted(
+        k for k, f in pred_finish_pairs if f == project_start and item_start == project_start
+    )
+    if tied_at_start and any(k in no_duration_keys for k in tied_at_start):
+        driver = next(k for k in tied_at_start if k in no_duration_keys)
+        return (
+            f"project_start ({project_start.isoformat()}) "
+            f"via {driver}[no_duration]"
+        )
     return f"project_start ({project_start.isoformat()})"
 
 
@@ -128,6 +148,7 @@ def _debug_flags(
     planned_start: Optional[date],
     duration_days: Optional[int],
     missing_preds: List[str],
+    preds_without_duration: List[str],
     in_cycle: bool,
     instance_count: int,
 ) -> str:
@@ -136,6 +157,8 @@ def _debug_flags(
         flags.append("shifted")
     if missing_preds:
         flags.append("missing_pred")
+    if preds_without_duration:
+        flags.append("pred_no_duration")
     if duration_days is None:
         flags.append("no_duration")
     if in_cycle:
@@ -216,6 +239,7 @@ def _schedule_line_items(
         cycle_nodes.update(entry.get("nodes_in_cycle_or_blocked") or [])
 
     finish_by_key: Dict[str, date] = {}
+    no_duration_keys: Set[str] = set()
     start_date = resolve_project_start_date()
     debug_by_key: Dict[str, dict] = {}
 
@@ -226,6 +250,9 @@ def _schedule_line_items(
 
         pred_finish_pairs: List[Tuple[str, date]] = [
             (p, finish_by_key[p]) for p in in_mdr_preds if p in finish_by_key
+        ]
+        preds_without_duration = [
+            p for p, _ in pred_finish_pairs if p in no_duration_keys
         ]
         pred_finishes = [f for _, f in pred_finish_pairs]
         item_start = max([start_date] + pred_finishes) if pred_finishes else start_date
@@ -238,16 +265,20 @@ def _schedule_line_items(
         item_finish: Optional[date] = None
         if duration is not None and duration >= 0:
             item_finish = item_start + timedelta(days=duration)
+        else:
+            no_duration_keys.add(key)
         finish_by_key[key] = item_finish or item_start
 
-        driving = _driving_predecessor(start_date, item_start, pred_finish_pairs)
+        driving = _driving_predecessor(
+            start_date, item_start, pred_finish_pairs, no_duration_keys
+        )
         instance_count = next(
             (i.instance_count for i in line_items if i.raci_title_key == key),
             1,
         )
         debug_by_key[key] = {
             "pred_keys": "; ".join(in_mdr_preds),
-            "pred_finishes": _format_pred_finishes(pred_finish_pairs),
+            "pred_finishes": _format_pred_finishes(pred_finish_pairs, no_duration_keys),
             "driving_pred": driving,
             "missing_preds": "; ".join(missing_preds),
             "flags": _debug_flags(
@@ -255,6 +286,7 @@ def _schedule_line_items(
                 planned_start=item_start,
                 duration_days=duration,
                 missing_preds=missing_preds,
+                preds_without_duration=preds_without_duration,
                 in_cycle=key in cycle_nodes,
                 instance_count=instance_count,
             ),
