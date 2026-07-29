@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .config import cfg, cfg_bool, cfg_int
 from .models import DocumentInstanceSpec, DocumentScopeDecision, NormalizedSignal, RawScopeSignal
+from .mdr_title import is_list_like_title
 from .pair_scope_context import build_pair_sow_context_chunks
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_title_enrichment_prompt
@@ -19,6 +20,18 @@ from .title_enrichment_examples import (
 from .utils import save_json
 
 _CONFIDENCE_RANK = {"strong": 3, "medium": 2, "weak": 1, "": 0}
+
+
+def _pick_single_element(elements: List[dict]) -> Optional[dict]:
+    if not elements:
+        return None
+    return max(
+        elements,
+        key=lambda el: (
+            _CONFIDENCE_RANK.get(str(el.get("confidence") or "").lower(), 0),
+            1 if (el.get("sow_specific_title") or "").strip() else 0,
+        ),
+    )
 
 
 def _pair_key(sig: NormalizedSignal) -> Tuple[str, str]:
@@ -92,11 +105,34 @@ def _apply_elements_to_decision(
         return dec, audit
 
     count_before = max(dec.instance_count, 0)
-    new_count = len(elements)
     qa_flags = list(dec.qa_flags)
+    working = list(elements)
+
+    list_like = is_list_like_title(dec.raci_title, dec.title_key)
+    if list_like and len(working) > 1:
+        picked = _pick_single_element(working)
+        working = [picked] if picked else []
+        qa_flags.append("list_no_split")
+        audit["list_no_split"] = True
+
+    # Non-scalable docs: enrich title at most once — never multi-row split.
+    if (not dec.scalable) and len(working) > 1:
+        picked = _pick_single_element(working)
+        working = [picked] if picked else []
+        qa_flags.append("non_scalable_no_split")
+        audit["non_scalable_no_split"] = True
+
+    if not working:
+        audit["outcome"] = "collapsed_empty"
+        audit["count_after"] = count_before
+        if qa_flags != dec.qa_flags:
+            return replace(dec, qa_flags=qa_flags), audit
+        return dec, audit
+
+    new_count = len(working)
 
     if new_count == 1:
-        el = elements[0]
+        el = working[0]
         inst = DocumentInstanceSpec(
             index=1,
             label=el.get("label", ""),
@@ -108,6 +144,7 @@ def _apply_elements_to_decision(
             dec,
             instance_count=1,
             instances=[inst],
+            qa_flags=qa_flags,
             selection_reason=f"{dec.selection_reason}; 3d: 1 SoW element",
         )
         audit["outcome"] = "single_element"
@@ -122,12 +159,10 @@ def _apply_elements_to_decision(
             sow_title_confidence=el.get("confidence", ""),
             sow_title_evidence=el.get("evidence_quote", ""),
         )
-        for i, el in enumerate(elements)
+        for i, el in enumerate(working)
     ]
 
-    if not dec.scalable:
-        qa_flags.append("sow_split_non_scalable")
-    elif new_count > count_before:
+    if new_count > count_before:
         qa_flags.append("sow_split_expanded")
     elif new_count < count_before:
         qa_flags.append("sow_split_reduced_vs_3b")

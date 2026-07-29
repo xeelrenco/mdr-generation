@@ -63,6 +63,12 @@ consolidate_normalized_signals = _im(
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
 recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
 run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_pass
+run_scope_exclusion_pass = _im(
+    "mdr_generator.2d_scope_exclusions"
+).run_scope_exclusion_pass
+apply_document_exclusions = _im(
+    "mdr_generator.2d_scope_exclusions"
+).apply_document_exclusions
 write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
 run_document_scope_pass = _im("mdr_generator.3b_document_scope").run_document_scope_pass
@@ -276,6 +282,7 @@ def main() -> int:
 
     renco_cmp = None
     gap_pass_audit: dict = {"enabled": False}
+    exclusion_audit: dict = {"enabled": True}
     discipline_short_codes: dict[str, str] = {}
     line_items = []
     scope_decisions = []
@@ -287,6 +294,7 @@ def main() -> int:
     ranked = []
     normalized = []
     uncertain = []
+    scope_exclusions = []
     raw_signals = []
 
     conn = connect_motherduck()
@@ -372,6 +380,21 @@ def main() -> int:
             save_json(raw_json, scope_payload)
         save_normalized(normalized, uncertain, norm_json)
 
+        print("Step 2d: esclusioni SoW (committente / fuori scope)...")
+        normalized, scope_exclusions, exclusion_audit = run_scope_exclusion_pass(
+            scope_pdfs,
+            normalized,
+            json_dir,
+            model=args.scope_llm_model,
+        )
+        save_normalized(normalized, uncertain, norm_json)
+        print(
+            f"  -> {exclusion_audit.get('exclusions_active', 0)} ambiti esclusi; "
+            f"coppie {exclusion_audit.get('pairs_before', '?')} -> "
+            f"{exclusion_audit.get('pairs_after', '?')} "
+            f"(-{exclusion_audit.get('pairs_dropped', 0)})"
+        )
+
         print("Step 3a: profili documento (Scalable, timeline, esempi storici)...")
         profiles = load_document_effort_profiles(conn)
         save_document_effort_profiles(
@@ -381,8 +404,14 @@ def main() -> int:
 
         print("Step 3: candidati RACI da raci_matrix.v_DocumentsEnriched...")
         candidates = fetch_raci_candidates(conn, normalized)
+        candidates, exclusion_audit = apply_document_exclusions(
+            candidates, scope_exclusions, json_dir, pair_audit=exclusion_audit
+        )
         save_candidates_csv(candidates, candidates_csv)
-        print(f"  -> {len(candidates)} candidati")
+        print(
+            f"  -> {len(candidates)} candidati "
+            f"(-{exclusion_audit.get('documents_dropped', 0)} esclusi SoW)"
+        )
 
         print("Step 4: ranking storico (solo MATCH consolidati)...")
         ranked = apply_historical_ranking(conn, candidates)
@@ -536,6 +565,9 @@ def main() -> int:
         scope_pass2_model=pass2_model if pass2_enabled else "",
         scope_pass2_pairs_targeted=gap_pass_audit.get("missing_before_pass2", 0),
         scope_pass2_pairs_recovered=gap_pass_audit.get("recovered_count", 0),
+        scope_exclusions_active=exclusion_audit.get("exclusions_active", 0),
+        scope_pairs_dropped=exclusion_audit.get("pairs_dropped", 0),
+        scope_docs_dropped=exclusion_audit.get("documents_dropped", 0),
         document_scope_decisions=len(scope_decisions),
         mdr_line_items=len(line_items),
         duration_populated_count=duration_populated,
@@ -564,6 +596,7 @@ def main() -> int:
         summary,
         renco=renco_cmp,
         llm_usage=llm_usage,
+        exclusion_audit=exclusion_audit,
     )
     print(f"Step 7: report qualità -> {report_path}")
     print(f"Tempo totale pipeline: {elapsed_label}")

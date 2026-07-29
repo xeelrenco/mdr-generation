@@ -8,6 +8,17 @@ from typing import Optional
 TITLE_SEPARATOR = " | "
 DISPLAY_TITLE_SEPARATOR = TITLE_SEPARATOR
 
+_LIST_TITLE_RE = re.compile(
+    r"(?:\blists?\b|\bregisters?\b|\bindexes?\b|\bindices\b)",
+    re.IGNORECASE,
+)
+
+
+def is_list_like_title(title: str, title_key: str = "") -> bool:
+    """True for Equipment List / Valve List / Register / Index style RACI titles."""
+    hay = f"{title_key} {title}".strip()
+    return bool(_LIST_TITLE_RE.search(hay))
+
 
 def _clean_instance_label(label: str, index: int) -> str:
     text = (label or "").strip()

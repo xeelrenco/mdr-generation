@@ -983,6 +983,7 @@ def _resolve_llm_stage(pass_id: str, stage: Optional[str] = None) -> str:
         "pass1": "pass1_scope",
         "pass2": "pass2_gap",
         "pass3b": "pass3b_scalable",
+        "pass2d": "pass2d_scope_exclusions",
     }.get((pass_id or "pass1").lower(), "pass1_scope")
 
 

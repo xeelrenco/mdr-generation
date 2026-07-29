@@ -74,6 +74,63 @@ _MDR_SUFFIX_LANGUAGE_RULES = """LANGUAGE (MDR title suffix fields: label, sow_sp
 - Historical or few-shot examples illustrate scope/granularity only — suffix language is always English."""
 
 
+def build_scope_exclusion_prompt() -> str:
+    """Prompt for step 2d: extract client-responsibility / out-of-scope packages from SoW."""
+    return """You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
+
+Your task: find packages, systems, or work areas that are OUT OF CONTRACTOR DOCUMENTATION SCOPE
+because they are:
+- explicitly excluded from the Scope of Work, OR
+- assigned to the Client / Owner / Employer / Committente / "by Others" / "by Client"
+  (and NOT explicitly assigned to the Contractor / Assuntore / EPC contractor for documentation).
+
+Do NOT list packages that the contractor must document. Only exclusions / client-responsibility items.
+
+Typical packages to LOOK FOR in the SoW (search hints only — emit only if SoW evidence supports them):
+- civil works / buildings / foundations (except items explicitly given to the contractor)
+- fire & gas / firefighting / FGS
+- lighting / illumination systems
+- electrical substation / switchyard / control room / central control building
+- DCS, MCC, and non-machine electrical/instrument panels (panels not supplied with a machine/package)
+
+For EACH exclusion found, output one object:
+- package: short English label (e.g. "civil works", "fire and gas", "lighting")
+- package_key: snake_case key (e.g. civil, fire_gas, lighting, substation_control_room, dcs_mcc_panels)
+- responsibility: "committente" | "assuntore" | "unknown"
+- explicit_assuntore: true ONLY if the SoW clearly assigns this package's documentation to the contractor
+- exclusion_type: "excluded_from_scope" | "client_responsibility"
+- suggested_discipline_codes: list of RACI discipline codes likely impacted (e.g. ["CIV"], ["ELE","ICT"])
+- chapter_keywords: short uppercase-ish keywords to match RACI chapter names (e.g. ["LIGHTING","FGS","BUILDING"])
+- title_keywords: lowercase keywords to match RACI document titles (e.g. ["lighting","fire and gas","dcs","mcc","substation","control room"])
+- confidence: "strong" | "medium" | "weak"
+- source_pages: 1-based PDF page numbers
+- evidence_quote: verbatim SoW quote (max 250 chars)
+
+Rules:
+- Require SoW evidence for every exclusion — do not invent packages from general EPC practice.
+- If the SoW says work is by Client/Committente and does NOT explicitly give documentation to the Assuntore,
+  set responsibility="committente" and explicit_assuntore=false.
+- If a package is excluded from scope entirely, use exclusion_type="excluded_from_scope".
+- If unsure, omit the package (prefer false negatives over false positives).
+- Respond with JSON only: {"exclusions": [...]}
+"""
+
+
+def build_scope_exclusion_chunk_prompt(
+    page_start: int,
+    page_end: int,
+    total_pages: int,
+) -> str:
+    base = build_scope_exclusion_prompt()
+    return (
+        f"{base}\n\n"
+        f"CHUNK CONTEXT: This upload is an excerpt of the full Scope of Work PDF "
+        f"(global pages {page_start}–{page_end} of {total_pages} total pages).\n"
+        f"- In source_pages use GLOBAL 1-based page numbers within {page_start}–{page_end} only.\n"
+        f"- Report every client-responsibility / out-of-scope package visible in this excerpt.\n"
+    )
+
+
 def build_scope_pdf_prompt(vocab: RaciVocabulary) -> str:
     return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
@@ -328,6 +385,10 @@ RULES:
 {count_rule}
 - Do not output documents not in the catalog list.
 - label must not be generic like "NUM 2" only — leave empty if no meaningful suffix.
+- LIST / REGISTER / INDEX documents (title contains "list", "register", or "index" as the
+  document type, e.g. Equipment List, Valve List, Cable List): always instance_count=1.
+  Do NOT create one instance per listed tag/item. Only use count>1 if the SoW clearly requires
+  distinct list deliverables (e.g. separate lists per train/area), not per equipment item.
 
 {_MDR_SUFFIX_LANGUAGE_RULES}
 
@@ -394,9 +455,9 @@ List sow_elements evident ONLY in this part.
     return f"""You analyze Scope of Work (SoW) excerpts for an EPC/engineering project.
 
 The RACI pair {discipline_code} | {chapter_name} is confirmed in project scope.
-Each catalog document below may map to ONE OR MORE distinct MDR rows when the SoW
-enumerates separate items at a compatible scope (buildings, units, areas, trains,
-utility/service systems, equipment tags, packages, battery limits, etc.).
+Each catalog document below may map to ONE MDR row by default. Multi-row split is allowed
+ONLY when the RACI document itself is a per-item deliverable AND splitting is fundamental
+to distinguish separate deliverables (buildings, trains, utility systems, equipment tags).
 {part_note}
 SOW CONTEXT:
 {sow_context}
@@ -418,13 +479,18 @@ RULES:
 
 {_MDR_SUFFIX_LANGUAGE_RULES}
 
-GRANULARITY (split vs single):
-- When the SoW enumerates multiple distinct items in a list/table (numbered items, bullets, rows a/b/c…),
-  output ONE sow_element per listed item — never collapse the whole list into one generic label.
-- Use the same granularity as the SoW enumeration: if the SoW names separate utility systems,
-  buildings, trains, or equipment, each name is a separate element.
-- A generic facility or project label alone (e.g. "Compressor Station", "Train 2", "New Unit")
-  is valid ONLY when the SoW does not break down finer items for that document.
+GRANULARITY (split vs single) — prefer FEWER rows:
+- LIST / REGISTER / INDEX RACI titles (Equipment List, Valve List, Cable List, etc.):
+  emit at most ONE sow_element (or []). Never one element per listed tag/item in the SoW.
+- NON-SCALABLE / plant-wide docs (Philosophy, Design Criteria, Design Basis, Specs that are
+  not per-equipment): default to ONE element or []. Do not split Start-up/Shutdown Philosophy
+  or similar into many rows.
+- Split into multiple sow_elements ONLY when the catalog document is inherently per-item
+  (data sheets, layouts per building/train, P&IDs per system) AND the SoW enumerates distinct
+  deliverables that must remain separate for MDR clarity.
+- When the SoW has a list/table of items but the RACI title IS the list document, keep a
+  single row — do not explode the list into many MDR lines.
+- A generic facility label alone is fine when no finer breakdown is needed for that document.
 
 MATCH RACI DOCUMENT SCOPE to SoW evidence (use the matching SoW excerpt type only):
 

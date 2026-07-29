@@ -62,15 +62,20 @@ def load_title_enrichment_examples(
             continue
         raci = str(item.get("raci_title") or "").strip()
         specific = str(item.get("sow_specific_title") or "").strip()
-        if not raci or not specific:
+        note = str(item.get("pattern_note") or "").strip()
+        if not raci:
             continue
+        if not specific and not note:
+            continue
+        if not specific:
+            specific = "(keep single MDR row — no per-item split)"
         examples.append(
             TitleEnrichmentExample(
                 raci_title=raci,
                 sow_specific_title=specific,
                 discipline_code=str(item.get("discipline_code") or "").strip().upper(),
                 chapter_name=str(item.get("chapter_name") or "").strip(),
-                pattern_note=str(item.get("pattern_note") or "").strip(),
+                pattern_note=note,
             )
         )
         if limit > 0 and len(examples) >= limit:

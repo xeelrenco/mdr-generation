@@ -155,6 +155,7 @@ def write_qa_report(
     summary: PipelineSummary,
     renco: Optional[RencoComparison] = None,
     llm_usage: Optional[LlmUsageSummary] = None,
+    exclusion_audit: Optional[dict] = None,
 ) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
@@ -187,6 +188,11 @@ def write_qa_report(
             "Esclusi",
             "",
             "Segnali scope scartati in Step 2 (coppia non valida o fuori catalogo).",
+        ),
+        (
+            "Esclusioni_SoW",
+            "",
+            "Ambiti committente/fuori scope (Step 2d) e pair/documenti rimossi.",
         ),
         (
             "MDR_generato",
@@ -250,7 +256,22 @@ def write_qa_report(
         [
             "2. Coppie scope valide",
             summary.normalized_signal_count,
-            "Disciplina+capitolo presenti in catalogo",
+            "Disciplina+capitolo presenti in catalogo (dopo Step 2d)",
+        ],
+        [
+            "2d. Ambiti esclusi SoW",
+            summary.scope_exclusions_active,
+            "Committente / fuori scope con evidence",
+        ],
+        [
+            "   — coppie rimosse",
+            summary.scope_pairs_dropped,
+            "Coppie disciplina|chapter eliminate dallo scope",
+        ],
+        [
+            "   — documenti rimossi",
+            summary.scope_docs_dropped,
+            "TitleKey candidati esclusi per package SoW",
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
         [
@@ -468,6 +489,95 @@ def write_qa_report(
         ["Sezione SoW", "Disciplina LLM", "Capitolo LLM", "Motivo", "Recovery LLM", "PDF"],
         excl_rows,
         [24, 12, 28, 36, 14, 28],
+    )
+
+    # --- Foglio 3b: Esclusioni_SoW (Step 2d) ---
+    ws = wb.create_sheet("Esclusioni_SoW")
+    excl_audit = exclusion_audit or {}
+    row = _write_section_title(ws, 1, "Ambiti esclusi dallo SoW (Step 2d)")
+    excl_items = excl_audit.get("exclusions") or []
+    if excl_items:
+        package_rows = [
+            [
+                e.get("package", ""),
+                e.get("package_key", ""),
+                e.get("responsibility", ""),
+                "Sì" if e.get("explicit_assuntore") else "No",
+                e.get("exclusion_type", ""),
+                ",".join(e.get("suggested_discipline_codes") or []),
+                "Sì" if e.get("should_exclude") else "No",
+                e.get("confidence", ""),
+                (e.get("evidence_quote") or "")[:300],
+                e.get("source_pdf", ""),
+            ]
+            for e in excl_items
+        ]
+    else:
+        package_rows = [["—", "—", "—", "—", "—", "—", "—", "—", "Nessuna esclusione trovata", "—"]]
+    row = _write_table(
+        ws,
+        row,
+        [
+            "Package",
+            "Key",
+            "Responsabilità",
+            "Assuntore esplicito",
+            "Tipo",
+            "Discipline",
+            "Attiva",
+            "Conf.",
+            "Evidence",
+            "PDF",
+        ],
+        package_rows,
+        [22, 18, 14, 14, 18, 14, 8, 8, 40, 22],
+    )
+    row += 1
+    row = _write_section_title(ws, row, "Coppie rimosse")
+    dropped_pairs = excl_audit.get("dropped_pairs") or []
+    if dropped_pairs:
+        pair_rows = [
+            [
+                d.get("discipline_code", ""),
+                d.get("chapter_name", ""),
+                d.get("package", ""),
+                d.get("reason", ""),
+                (d.get("evidence_quote") or "")[:250],
+            ]
+            for d in dropped_pairs
+        ]
+    else:
+        pair_rows = [["—", "—", "—", "Nessuna coppia rimossa", "—"]]
+    row = _write_table(
+        ws,
+        row,
+        ["Disciplina", "Capitolo", "Package", "Motivo", "Evidence"],
+        pair_rows,
+        [12, 36, 22, 22, 40],
+    )
+    row += 1
+    row = _write_section_title(ws, row, "Documenti RACI rimossi")
+    dropped_docs = excl_audit.get("dropped_documents") or []
+    if dropped_docs:
+        doc_rows = [
+            [
+                d.get("discipline_code", ""),
+                d.get("chapter_name", ""),
+                d.get("title", ""),
+                d.get("title_key", ""),
+                d.get("package", ""),
+                d.get("reason", ""),
+            ]
+            for d in dropped_docs
+        ]
+    else:
+        doc_rows = [["—", "—", "—", "—", "—", "Nessun documento rimosso"]]
+    _write_table(
+        ws,
+        row,
+        ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Package", "Motivo"],
+        doc_rows,
+        [12, 28, 40, 28, 18, 22],
     )
 
     # --- Foglio 4: MDR_generato ---

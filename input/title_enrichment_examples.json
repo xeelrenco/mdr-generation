@@ -166,5 +166,33 @@
     "discipline_code": "MAC",
     "chapter_name": "HEAT EXCHANGERS",
     "pattern_note": "Train prefix + equipment — split by train/area"
+  },
+  {
+    "raci_title": "EQUIPMENT LIST",
+    "sow_specific_title": "",
+    "discipline_code": "PRC",
+    "chapter_name": "EQUIPMENT SUMMARY",
+    "pattern_note": "List document: keep ONE row — do not split per equipment tag/item"
+  },
+  {
+    "raci_title": "VALVE LIST",
+    "sow_specific_title": "",
+    "discipline_code": "PVV",
+    "chapter_name": "PIPING LISTS",
+    "pattern_note": "List document: single MDR row even if SoW enumerates many valves"
+  },
+  {
+    "raci_title": "POWER AND CONTROL CABLE LIST",
+    "sow_specific_title": "",
+    "discipline_code": "ELE",
+    "chapter_name": "LIST",
+    "pattern_note": "Cable list: one document, no per-cable split"
+  },
+  {
+    "raci_title": "START-UP AND SHUTDOWN PHILOSOPHY",
+    "sow_specific_title": "",
+    "discipline_code": "PRC",
+    "chapter_name": "DESIGN BASIS, GENERAL SPECIFICATION, DESIGN CRITERIA & PHILOSOPHY",
+    "pattern_note": "Non-scalable philosophy: never multi-row split"
   }
 ]

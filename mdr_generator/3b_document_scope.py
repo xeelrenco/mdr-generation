@@ -18,6 +18,7 @@ from .pair_scope_context import build_pair_sow_context_chunks
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_scalable_instance_prompt
 from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes
+from .mdr_title import is_list_like_title
 from .utils import save_json
 
 
@@ -134,6 +135,12 @@ def _parse_scalable_instance_decisions(
             if count > 0
             else []
         )
+        if count > 1 and is_list_like_title(cand.title, title_key):
+            count = 1
+            instances = _normalize_instances(1, None)
+            qa_flags.append("list_no_split")
+            reason = "List/register document forced to instance_count=1"
+
         decisions.append(
             DocumentScopeDecision(
                 title_key=title_key,
