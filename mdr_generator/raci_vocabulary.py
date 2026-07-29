@@ -438,6 +438,92 @@ Respond with JSON only:
 """
 
 
+def build_catalog_verification_prompt(
+    candidate_pairs: List[Tuple[str, str]],
+    page_start: int,
+    page_end: int,
+    total_pages: int,
+    pair_examples: Optional[Dict[Tuple[str, str], List[str]]] = None,
+    *,
+    tie_break: bool = False,
+) -> str:
+    """Closed-vocabulary pair verification used by the stable scope consensus."""
+    lines: List[str] = []
+    for disc, chap in sorted(candidate_pairs):
+        examples = (pair_examples or {}).get((disc, chap)) or []
+        suffix = ""
+        if examples:
+            suffix = f" (chapter examples only: {'; '.join(examples[:2])[:140]})"
+        lines.append(f"- {disc} | {chap}{suffix}")
+    pairs_block = "\n".join(lines)
+    if tie_break:
+        task_label = (
+            "TIE-BREAK: two previous analyses disagreed on these pairs. You read the "
+            "COMPLETE SoW and issue the deciding judgement."
+        )
+        source_label = (
+            f"This upload is the COMPLETE SoW ({total_pages} pages), not an excerpt."
+        )
+        scope_label = (
+            "present=false is a FINAL decision: it means the whole SoW does not put "
+            "that pair in the Contractor's documentation scope."
+        )
+    else:
+        task_label = "INDEPENDENT VERIFICATION: assess every assigned catalog pair."
+        source_label = f"This upload is global pages {page_start}-{page_end} of {total_pages}."
+        scope_label = (
+            'present=false means only "not supported in this excerpt"; another excerpt '
+            "may support it."
+        )
+    return f"""You verify official RACI discipline+chapter pairs against an
+EPC/engineering Scope of Work (SoW) PDF.
+
+{task_label}
+
+ASSIGNED PAIRS:
+{pairs_block}
+
+Return EXACTLY one decision for every assigned pair, in the same discipline/chapter spelling.
+present=true only when the text puts engineering documentation or deliverables of that pair
+inside the Contractor's scope of work. A system, equipment item, work category, test or
+required engineering activity in scope is sufficient support; do not require the exact
+chapter wording.
+
+present=false, even when the chapter subject appears in the text, whenever the text only:
+- denies or excludes the work ("non sono previsti lavori", "nessun intervento",
+  "escluso dalla fornitura", "a carico del Committente/Cliente");
+- names existing plant or equipment that receives no work in this project;
+- mentions an interface, signal exchange or communication protocol towards a
+  third-party or existing system, instead of designing that system;
+- describes a different system or activity that merely resembles the chapter name.
+
+For every decision:
+- discipline_code: exact assigned code
+- chapter_name: exact assigned chapter
+- present: true | false
+- confidence: "strong" | "medium" | "weak"
+- source_pages: GLOBAL 1-based pages within {page_start}-{page_end}; required when present=true
+- evidence_quote: short verbatim quote; required when present=true
+- reason: short explanation, especially when present=false
+
+Rules:
+- {source_label}
+- Decide every assigned pair; never omit difficult pairs.
+- The evidence_quote must state the work, not deny it. A negated sentence is never evidence.
+- Use confidence="strong" only for an explicit scope obligation; a single indirect or
+  inferred mention is "weak".
+- Parenthetical document examples explain chapter meaning only. They are not project evidence.
+- Do not infer a pair from generic EPC practice.
+- Do not output unassigned pairs.
+- {scope_label}
+- If evidence is ambiguous, use present=false rather than inventing support.
+- JSON only:
+{{"decisions": [{{"discipline_code": "...", "chapter_name": "...",
+"present": true, "confidence": "strong", "source_pages": [1],
+"evidence_quote": "...", "reason": "..."}}]}}
+"""
+
+
 def build_scope_pdf_chunk_repass_prompt(
     vocab: RaciVocabulary,
     page_start: int,

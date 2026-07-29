@@ -80,7 +80,7 @@ def _chunk_page_ranges(
 def _parse_llm_signals(
     data: Dict[str, Any],
     source_pdf: str,
-    seen: Optional[Set[tuple[str, str, Optional[str]]]] = None,
+    seen: Optional[Set[tuple[str, str]]] = None,
     extraction_method: str = "llm_pdf",
     chunk_page_start: Optional[int] = None,
     chunk_page_end: Optional[int] = None,
@@ -104,7 +104,7 @@ def _parse_llm_signals(
         pages_raw = item.get("source_pages") or []
         pages = [int(p) for p in pages_raw if str(p).isdigit()]
 
-        key = (disc_code, section.lower(), chapter_name)
+        key = (disc_code, chapter_name)
         if key in seen:
             continue
         seen.add(key)
@@ -310,7 +310,9 @@ def _call_openai_pdf(
         "response_format": {"type": "json_object"},
     }
     if _openai_supports_custom_temperature(model):
-        create_kwargs["temperature"] = 0.1
+        create_kwargs["temperature"] = (
+            0.0 if stage.startswith("pass2_catalog_") else 0.1
+        )
     response = client.chat.completions.create(**create_kwargs)
     _record_openai_usage(response, model, stage, "pdf")
     return parse_json_response(response.choices[0].message.content or "{}")
@@ -348,7 +350,7 @@ def _call_gemini_pdf(
             ],
         ),
         config=types.GenerateContentConfig(
-            temperature=0.1,
+            temperature=0.0 if stage.startswith("pass2_catalog_") else 0.1,
             response_mime_type="application/json",
         ),
     )
@@ -672,13 +674,13 @@ def _run_chunk_repass(
 
 def _merge_chunk_signals(
     signals: List[RawScopeSignal],
-    seen: Set[tuple[str, str, Optional[str]]],
+    seen: Set[tuple[str, str]],
     out: List[RawScopeSignal],
-    out_index: Optional[Dict[tuple[str, str, Optional[str]], int]] = None,
+    out_index: Optional[Dict[tuple[str, str], int]] = None,
 ) -> None:
     index = out_index if out_index is not None else {}
     for sig in signals:
-        key = (sig.discipline_code, sig.chapter_name, sig.scope_section)
+        key = (sig.discipline_code, sig.chapter_name or "")
         if key in seen:
             if key in index:
                 existing = out[index[key]]
@@ -689,6 +691,13 @@ def _merge_chunk_signals(
                 if extra and extra not in (existing.evidence_quote or ""):
                     combined = f"{existing.evidence_quote} | {extra}"
                     existing.evidence_quote = combined[:250]
+                section = (sig.scope_section or "").strip()
+                if section and section not in (existing.scope_section or ""):
+                    existing.scope_section = (
+                        f"{existing.scope_section}; {section}"
+                        if existing.scope_section
+                        else section
+                    )[:200]
             continue
         seen.add(key)
         index[key] = len(out)
@@ -709,8 +718,8 @@ def _extract_scope_chunked(
     repass_min_chars = max(0, cfg_int("SCOPE_PASS1_CHUNK_REPASS_MIN_CHARS", 200))
     ranges = _chunk_page_ranges(total_pages, chunk_pages, overlap)
 
-    seen: Set[tuple[str, str, Optional[str]]] = set()
-    signal_index: Dict[tuple[str, str, Optional[str]], int] = {}
+    seen: Set[tuple[str, str]] = set()
+    signal_index: Dict[tuple[str, str], int] = {}
     all_signals: List[RawScopeSignal] = []
     runs: List[Dict[str, Any]] = []
     workers = llm_parallel_workers()
@@ -916,7 +925,7 @@ def chunk_page_ranges(
 def parse_llm_scope_signals(
     data: Dict[str, Any],
     source_pdf: str,
-    seen: Optional[Set[tuple[str, str, Optional[str]]]] = None,
+    seen: Optional[Set[tuple[str, str]]] = None,
     extraction_method: str = "llm_pdf",
     chunk_page_start: Optional[int] = None,
     chunk_page_end: Optional[int] = None,
@@ -956,7 +965,7 @@ def resolve_scope_llm_config(
     pass_id: str = "pass1",
     cli_model: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Risolve provider e modello per pass1 (estrazione) o pass2 (gap mirato).
+    """Risolve provider e modello per pass1 o pass2 (verifica catalogo).
 
     Il provider è dedotto automaticamente dal nome modello (gpt→openai,
     gemini→gemini, claude→claude). Config: SCOPE_PASS1_LLM_MODEL / SCOPE_PASS2_LLM_MODEL.

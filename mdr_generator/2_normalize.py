@@ -181,7 +181,16 @@ def consolidate_normalized_signals(
     """One NormalizedSignal per pair with merged pages and evidence."""
     out: List[NormalizedSignal] = []
     index: dict[tuple[str, str], int] = {}
-    for sig in signals:
+    for sig in sorted(
+        signals,
+        key=lambda value: (
+            value.discipline_code,
+            value.chapter_name or "",
+            value.source_pdf,
+            min(value.source_pages) if value.source_pages else 0,
+            value.scope_section,
+        ),
+    ):
         key = (sig.discipline_code, sig.chapter_name or "")
         if key in index:
             _merge_normalized_signals(out[index[key]], sig)
@@ -209,7 +218,16 @@ def normalize_signals(
     uncertain: List[UncertainMapping] = []
     pair_index: dict[tuple[str, str], int] = {}
 
-    for raw in raw_signals:
+    for raw in sorted(
+        raw_signals,
+        key=lambda value: (
+            value.source_pdf,
+            value.discipline_code,
+            value.chapter_name or "",
+            min(value.source_pages) if value.source_pages else 0,
+            value.scope_section,
+        ),
+    ):
         method_parts: List[str] = []
 
         disc = _resolve_discipline_code(raw, discipline_codes)

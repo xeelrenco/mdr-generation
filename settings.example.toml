@@ -23,7 +23,10 @@ chunk_repass_min_chars = 200
 [scope.pass2]
 enabled = true
 llm_model = "gemini-2.5-pro"
-max_pairs = 60
+tiebreak_llm_model = ""  # vuoto = usa scope.pass1.llm_model (terzo voto indipendente)
+min_support_chunks = 2  # chunk concordi per ammettere una coppia non trovata da pass1
+batch_size = 30
+workers = 4
 chunk_enabled = true
 chunk_pages = 10
 chunk_overlap = 2

@@ -250,9 +250,9 @@ def write_qa_report(
             "Pass 1 — risolto da config/CLI",
         ],
         [
-            "Pass 2 gap mirato",
+            "Pass 2 consenso catalogo",
             "Sì" if summary.scope_pass2_enabled else "No",
-            "Second pass su coppie catalogo RACI non estratte al pass 1",
+            "Verifica indipendente dell'intero catalogo + tie-break sui disaccordi",
         ],
         [
             "Provider / modello pass 2",
@@ -264,14 +264,66 @@ def write_qa_report(
             "Config SCOPE_PASS2_*",
         ],
         [
-            "Coppie target pass 2",
-            summary.scope_pass2_pairs_targeted if summary.scope_pass2_enabled else "—",
-            "Coppie catalogo RACI non ancora in scope dopo pass 1",
+            "Coppie verificate pass 2",
+            summary.scope_pass2_pairs_verified if summary.scope_pass2_enabled else "—",
+            "Intero catalogo RACI, in batch deterministici",
         ],
         [
-            "Coppie recuperate pass 2",
-            summary.scope_pass2_pairs_recovered if summary.scope_pass2_enabled else "—",
-            "Aggiunte allo scope normalizzato",
+            "Coppie finali dopo consenso",
+            summary.scope_pass2_pairs_final if summary.scope_pass2_enabled else "—",
+            "Accordo pass 1/pass 2 oppure decisione tie-break",
+        ],
+        [
+            "Modello tie-break",
+            (
+                summary.scope_pass2_tiebreak_model or "—"
+                if summary.scope_pass2_enabled
+                else "—"
+            ),
+            "Terzo voto su PDF completo, modello diverso dal pass 2",
+        ],
+        [
+            "Disaccordi inviati al tie-break",
+            summary.scope_pass2_disagreements if summary.scope_pass2_enabled else "—",
+            "Comprende risposte pass 2 incomplete/unknown",
+        ],
+        [
+            "Coppie scartate per supporto insufficiente",
+            (
+                summary.scope_pass2_insufficient_support
+                if summary.scope_pass2_enabled
+                else "—"
+            ),
+            "Non trovate dal pass 1 e sostenute da un solo chunk non strong",
+        ],
+        [
+            "Fail-open per risposta incompleta",
+            summary.scope_pass2_fallbacks if summary.scope_pass2_enabled else "—",
+            "Pair mantenute perché il tie-break non ha dato una decisione completa",
+        ],
+        [
+            "Stabilità vs run precedente (Jaccard)",
+            (
+                f"{summary.scope_stability_jaccard:.4f}"
+                if summary.scope_stability_jaccard is not None
+                else "—"
+            ),
+            (
+                f"{summary.scope_stability_previous_run}; "
+                f"+{summary.scope_stability_pairs_added} / "
+                f"-{summary.scope_stability_pairs_removed} pair; "
+                f"delta candidati="
+                f"{summary.scope_stability_candidate_delta:+d}"
+                if summary.scope_stability_previous_run
+                and summary.scope_stability_candidate_delta is not None
+                else (
+                    f"{summary.scope_stability_previous_run}; "
+                    f"+{summary.scope_stability_pairs_added} / "
+                    f"-{summary.scope_stability_pairs_removed} pair"
+                    if summary.scope_stability_previous_run
+                    else "Prima run archiviata con il nuovo audit"
+                )
+            ),
         ],
         ["1. Segnali LLM (raw)", summary.raw_signal_count, "Estratti dal PDF"],
         [

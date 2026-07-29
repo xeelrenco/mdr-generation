@@ -51,7 +51,7 @@ def resolve_scope_pdfs(explicit_paths: Optional[Sequence[str]] = None) -> List[P
                 "PDF Scope non trovati:\n"
                 + "\n".join(f"  - {p}" for p in missing)
             )
-        return paths
+        return sorted(paths, key=lambda path: str(path.resolve()).lower())
 
     pdfs = discover_sow_pdfs()
     if not pdfs:

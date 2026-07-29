@@ -48,6 +48,11 @@ from mdr_generator.llm_usage import (
 from mdr_generator.parallel_workers import llm_parallel_workers
 from mdr_generator.models import PipelineSummary
 from mdr_generator.scope_pdf import resolve_scope_llm_config
+from mdr_generator.scope_run_history import (
+    archive_json_run,
+    compare_with_previous_run,
+    save_scope_comparison,
+)
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import format_elapsed_seconds, resolve_json_output_dir, save_json
 
@@ -120,12 +125,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--scope-pass2-llm-model",
         default=None,
-        help="Override modello LLM pass 2 gap (default: SCOPE_PASS2_LLM_MODEL)",
+        help="Override modello verifica catalogo (default: SCOPE_PASS2_LLM_MODEL)",
     )
     p.add_argument(
         "--no-scope-pass2",
         action="store_true",
-        help="Disabilita pass 2 gap mirato anche se SCOPE_PASS2_ENABLED=true",
+        help="Disabilita verifica/consenso catalogo anche se SCOPE_PASS2_ENABLED=true",
     )
     p.add_argument(
         "--no-schedule",
@@ -136,6 +141,11 @@ def _parse_args() -> argparse.Namespace:
         "--no-title-enrichment",
         action="store_true",
         help="Disabilita Step 3d arricchimento/split titoli SoW",
+    )
+    p.add_argument(
+        "--scope-only",
+        action="store_true",
+        help="Esegue solo estrazione, validazione e consenso scope (canary stabilità)",
     )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
@@ -262,9 +272,9 @@ def main() -> int:
 
     print(f"LLM pass 1 (scope): {pass1_provider} / {pass1_model}")
     if pass2_enabled:
-        print(f"LLM pass 2 (gap):   {pass2_provider} / {pass2_model}")
+        print(f"LLM pass 2 (consenso catalogo): {pass2_provider} / {pass2_model}")
     else:
-        print("LLM pass 2 (gap):   disabilitato")
+        print("LLM pass 2 (consenso catalogo): disabilitato")
     print(
         f"Schedule (Step 5):   "
         f"{'attivo (durata, MANHOURS, date)' if schedule_enabled else 'disabilitato'}"
@@ -283,6 +293,7 @@ def main() -> int:
 
     renco_cmp = None
     gap_pass_audit: dict = {"enabled": False}
+    scope_run_comparison: dict = {"available": False}
     exclusion_audit: dict = {"enabled": True}
     basis_gate_audit: dict = {"enabled": True}
     discipline_short_codes: dict[str, str] = {}
@@ -350,18 +361,17 @@ def main() -> int:
 
         if pass2_enabled:
             print(
-                "Step 2c: second pass mirato su coppie catalogo RACI "
-                "non ancora estratte..."
+                "Step 2c: verifica completa catalogo RACI e consenso pair..."
             )
-            gap_recovered, gap_pass_audit, gap_raw = run_gap_targeted_pass(
+            consensus_signals, gap_pass_audit, gap_raw = run_gap_targeted_pass(
                 scope_pdfs,
                 conn,
                 vocab,
-                existing_pairs,
+                normalized,
                 model=args.scope_pass2_llm_model,
             )
-            if gap_recovered:
-                normalized.extend(gap_recovered)
+            normalized = consensus_signals
+            if gap_raw:
                 raw_signals.extend(gap_raw)
             save_json(json_dir / "scope_gap_pass_audit.json", gap_pass_audit)
         else:
@@ -376,6 +386,21 @@ def main() -> int:
         normalized = consolidate_normalized_signals(normalized)
         normalized_before_exclusions = list(normalized)
         candidates_before_exclusions = fetch_raci_candidates(conn, normalized)
+        if pass2_enabled:
+            scope_run_comparison = compare_with_previous_run(
+                gap_pass_audit,
+                output_dir / "runs",
+                project,
+                current_candidate_count=len(candidates_before_exclusions),
+            )
+        else:
+            scope_run_comparison = {
+                "available": False,
+                "reason": "scope_pass2_disabled",
+            }
+        save_scope_comparison(
+            json_dir / "scope_run_comparison.json", scope_run_comparison
+        )
         if raw_signals:
             scope_payload: dict = {}
             if raw_json.exists():
@@ -383,6 +408,33 @@ def main() -> int:
             scope_payload["signals"] = [s.to_dict() for s in raw_signals]
             save_json(raw_json, scope_payload)
         save_normalized(normalized, uncertain, norm_json)
+        if args.scope_only:
+            usage = build_usage_summary()
+            save_usage_audit(json_dir, usage)
+            save_json(
+                json_dir / "scope_only_summary.json",
+                {
+                    "project_name": project,
+                    "scope_pdfs": [path.name for path in scope_pdfs],
+                    "raw_signal_count": len(raw_signals),
+                    "final_pair_count": len(normalized),
+                    "candidate_count": len(candidates_before_exclusions),
+                    "uncertain_count": len(uncertain),
+                    "catalog_sha256": gap_pass_audit.get("catalog_sha256", ""),
+                    "disagreement_count": gap_pass_audit.get("disagreement_count", 0),
+                    "fallback_count": gap_pass_audit.get("fallback_count", 0),
+                    "insufficient_support_count": gap_pass_audit.get(
+                        "insufficient_support_count", 0
+                    ),
+                    "tiebreak_model": gap_pass_audit.get("tiebreak_model", ""),
+                    "comparison": scope_run_comparison,
+                    "llm_usage": usage.to_dict(),
+                },
+            )
+            archived = archive_json_run(json_dir, output_dir, project, ts)
+            print(f"Scope-only completato: {len(normalized)} pair finali")
+            print(f"Audit archiviati: {archived}")
+            return 0
 
         print("Step 2d: esclusioni SoW (committente / fuori scope)...")
         normalized, scope_exclusions, exclusion_audit = run_scope_exclusion_pass(
@@ -610,8 +662,20 @@ def main() -> int:
         scope_pass2_enabled=pass2_enabled,
         scope_pass2_provider=pass2_provider if pass2_enabled else "",
         scope_pass2_model=pass2_model if pass2_enabled else "",
-        scope_pass2_pairs_targeted=gap_pass_audit.get("missing_before_pass2", 0),
-        scope_pass2_pairs_recovered=gap_pass_audit.get("recovered_count", 0),
+        scope_pass2_pairs_verified=gap_pass_audit.get("pairs_targeted", 0),
+        scope_pass2_pairs_final=gap_pass_audit.get("final_present_count", 0),
+        scope_pass2_disagreements=gap_pass_audit.get("disagreement_count", 0),
+        scope_pass2_fallbacks=gap_pass_audit.get("fallback_count", 0),
+        scope_pass2_tiebreak_model=gap_pass_audit.get("tiebreak_model", ""),
+        scope_pass2_insufficient_support=gap_pass_audit.get(
+            "insufficient_support_count", 0
+        ),
+        scope_catalog_sha256=gap_pass_audit.get("catalog_sha256", ""),
+        scope_stability_previous_run=scope_run_comparison.get("previous_run", ""),
+        scope_stability_jaccard=scope_run_comparison.get("jaccard"),
+        scope_stability_pairs_added=scope_run_comparison.get("added_count", 0),
+        scope_stability_pairs_removed=scope_run_comparison.get("removed_count", 0),
+        scope_stability_candidate_delta=scope_run_comparison.get("candidate_delta"),
         scope_exclusions_active=exclusion_audit.get("exclusions_active", 0),
         scope_pairs_dropped=exclusion_audit.get("pairs_dropped", 0),
         scope_docs_dropped=exclusion_audit.get("documents_dropped", 0),
@@ -659,7 +723,9 @@ def main() -> int:
         exclusion_audit=exclusion_audit,
         basis_gate_audit=basis_gate_audit,
     )
+    archived_json = archive_json_run(json_dir, output_dir, project, ts)
     print(f"Step 7: report qualità -> {report_path}")
+    print(f"Audit archiviati: {archived_json}")
     print(f"Tempo totale pipeline: {elapsed_label}")
     print(format_usage_console(llm_usage))
     if args.dry_run:
