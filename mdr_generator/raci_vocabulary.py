@@ -115,6 +115,10 @@ For EACH exclusion, output one object:
 - pairs: list of {{"discipline_code","chapter_name"}} using ONLY allowed pairs
   - required for exclude_level="pair" (one or more pairs)
   - empty otherwise
+- retained_deliverables: short list of Contractor deliverables explicitly preserved by
+  the SoW; if non-empty, exclude_level MUST be "document"
+- scope_qualifiers: short list of boundary qualifiers from the evidence, such as
+  "existing system", "outside battery limits", "installation only", "Client equipment"
 - confidence: "strong" | "medium" | "weak"
 - source_pages: 1-based PDF page numbers
 - evidence_quote: verbatim SoW quote (max 250 chars)
@@ -131,9 +135,12 @@ HOW TO CHOOSE THE LEVEL — match the breadth of the SoW statement:
 - The SoW removes an entire engineering discipline → use "discipline".
 
 When you choose "pair" or "chapter", list ALL matching entries, not just the closest one.
-If the SoW keeps a few named deliverables of an otherwise excluded system (e.g. loads or
-layouts to be sent to the Client), still exclude at pair/chapter level and note the kept
-deliverables in evidence_quote — a later stage handles them.
+If the SoW keeps ANY named Contractor deliverable inside an otherwise excluded system
+(e.g. foundation loads or layouts to be sent to the Client), the exclusion is PARTIAL:
+use exclude_level="document", list the deliverables that must stay in
+retained_deliverables, and use pairs/chapters only as optional hints. Never use
+pair/chapter/discipline for a partial exclusion because those levels remove every
+document in their target.
 
 Rules:
 - Require SoW evidence — do not invent exclusions from general EPC practice.
@@ -142,7 +149,7 @@ Rules:
   responsibility="committente", explicit_assuntore=false.
 - If unsure whether an area is excluded at all, omit it; but once the SoW clearly excludes
   a system, do not narrow the level out of caution.
-- Respond with JSON only: {{"exclusions": [...]}}
+- Respond with JSON only: {{"schema_version": 2, "exclusions": [...]}}
 """
 
 
@@ -178,15 +185,29 @@ def build_document_exclusion_prompt(
     excl_type = _field("exclusion_type") or ""
     responsibility = _field("responsibility") or ""
     discs = ", ".join(_field("discipline_codes") or []) or "(any)"
+    chapters = ", ".join(_field("chapter_names") or []) or "(any)"
+    pairs = ", ".join(
+        f"{d}|{c}" for d, c in (_field("pairs") or [])
+    ) or "(any)"
+    retained = "; ".join(_field("retained_deliverables") or []) or "(none)"
+    qualifiers = "; ".join(_field("scope_qualifiers") or []) or "(none)"
+    pages = ", ".join(str(p) for p in (_field("source_pages") or [])) or "(unknown)"
 
     return f"""You map ONE Scope-of-Work DOCUMENTATION exclusion to exact RACI catalog documents.
+The original SoW PDF is attached. Use it to verify boundaries and retained Contractor
+deliverables; the excerpt below is only a locator.
 
 EXCLUDED AREA (already decided by a previous stage — do not question it, do not add others):
 - label: {label}
 - type: {excl_type}
 - responsibility: {responsibility}
 - likely disciplines: {discs}
+- likely chapters: {chapters}
+- likely pairs: {pairs}
+- source PDF pages (1-based): {pages}
 - SoW evidence: {evidence}
+- boundary qualifiers: {qualifiers}
+- Contractor deliverables that MUST be retained: {retained}
 
 CANDIDATE MDR DOCUMENTS (TitleKey | RACI Title | Discipline | Chapter):
 {catalog_block}
@@ -202,6 +223,9 @@ Rules:
   in Italian and the titles are in English.
 - Keep a document only if its subject is genuinely a different system that stays in
   contractor scope, or if the evidence itself requires the contractor to issue it.
+- Never exclude a candidate matching a retained deliverable. Distinguish carefully:
+  existing vs new systems, inside vs outside battery limits, installation vs engineering
+  or supply, and Client equipment vs Contractor-supplied equipment.
 - If nothing matches, return an empty list.
 - Respond with JSON only:
   {{"excluded_documents": [{{"title_key": "...", "reason": "..."}}]}}

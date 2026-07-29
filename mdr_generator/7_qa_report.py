@@ -95,9 +95,14 @@ def _reason_it(reason: str) -> str:
 def _build_gap_analysis_rows(
     renco: RencoComparison,
     normalized: List[NormalizedSignal],
+    selected: List[GeneratedDoc],
 ) -> tuple[List[List[Any]], List[List[Any]]]:
     """Righe dettaglio gap + riepilogo per disciplina."""
     scope_pairs = {(n.discipline_code, n.chapter_name or "") for n in normalized}
+    output_pairs = {
+        (document.discipline_code, document.chapter_name or "")
+        for document in selected
+    }
     pair_renco_docs: dict[tuple[str, str], int] = {}
     for p in renco.scope_pairs:
         if p.present_in_renco_raci:
@@ -112,30 +117,44 @@ def _build_gap_analysis_rows(
             continue
         pair = (r.discipline_code, r.chapter_name or "")
         gap_pairs.add(pair)
-        in_scope = pair in scope_pairs
+        scope_state = (
+            "Pair con output"
+            if pair in output_pairs
+            else "Pair estratta, 0 doc"
+            if pair in scope_pairs
+            else "Fuori scope"
+        )
         detail.append(
             [
                 r.discipline_code,
                 r.chapter_name,
                 r.raci_title,
-                "Sì" if in_scope else "No",
+                scope_state,
                 pair_renco_docs.get(pair, "—"),
             ]
         )
     detail.sort(key=lambda x: (x[0], x[1], x[2]))
 
-    pairs_in_scope = sum(1 for p in gap_pairs if p in scope_pairs)
+    pairs_with_output = sum(1 for pair in gap_pairs if pair in output_pairs)
+    pairs_scope_no_output = sum(
+        1 for pair in gap_pairs if pair in scope_pairs and pair not in output_pairs
+    )
     summary = [
         ["Titoli RACI nel gap", len(detail), "Solo MDR Renco (MATCH)"],
         ["Coppie disc+cap distinte nel gap", len(gap_pairs), ""],
         [
-            "Coppie gap coperte dallo scope di questa run",
-            pairs_in_scope,
-            "Scope estratto dal PDF in questa run",
+            "Coppie gap con documenti in output",
+            pairs_with_output,
+            "Almeno un documento finale nella coppia",
+        ],
+        [
+            "Coppie gap estratte ma con 0 documenti",
+            pairs_scope_no_output,
+            "Tutti i candidati rimossi da 2d/3e",
         ],
         [
             "Coppie gap ancora fuori scope",
-            len(gap_pairs) - pairs_in_scope,
+            len(gap_pairs) - pairs_with_output - pairs_scope_no_output,
             "Candidati per second pass mirato sul PDF",
         ],
     ]
@@ -276,9 +295,37 @@ def write_qa_report(
             "TitleKey candidati esclusi per package SoW",
         ],
         [
+            "   — documenti segnalati, non applicati",
+            summary.scope_docs_flagged,
+            (
+                "Circuit breaker 2d scattato"
+                if summary.scope_exclusion_guard_triggered
+                else "—"
+            ),
+        ],
+        [
             "3e. Doc senza base nello SoW",
             summary.sow_basis_docs_dropped,
             "Temi non previsti dal progetto (gate generalista)",
+        ],
+        [
+            "   — 3e segnalati, non applicati",
+            summary.sow_basis_docs_flagged,
+            (
+                "Circuit breaker 3e scattato"
+                if summary.sow_basis_guard_triggered
+                else "—"
+            ),
+        ],
+        [
+            "3. Candidati prima delle esclusioni",
+            summary.candidates_before_exclusions,
+            "Catalogo dalle coppie scope prima di 2d/3e",
+        ],
+        [
+            "3. Candidati dopo 2d",
+            summary.candidates_after_2d,
+            "Dopo i quattro livelli di esclusione",
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
         [
@@ -508,6 +555,7 @@ def write_qa_report(
             [
                 e.get("label", e.get("package", "")),
                 e.get("exclude_level", ""),
+                e.get("application_status", ""),
                 e.get("responsibility", ""),
                 "Sì" if e.get("explicit_assuntore") else "No",
                 e.get("exclusion_type", ""),
@@ -520,14 +568,17 @@ def write_qa_report(
                 ),
                 "Sì" if e.get("should_exclude") else "No",
                 e.get("confidence", ""),
+                "; ".join(e.get("parse_warnings") or []),
                 (e.get("evidence_quote") or "")[:300],
-                e.get("source_pdf", ""),
+                "; ".join(e.get("source_pdfs") or [e.get("source_pdf", "")]),
             ]
             for e in excl_items
         ]
     else:
         package_rows = [
             [
+                "—",
+                "—",
                 "—",
                 "—",
                 "—",
@@ -548,6 +599,7 @@ def write_qa_report(
         [
             "Label",
             "Livello",
+            "Stato applicazione",
             "Responsabilità",
             "Assuntore esplicito",
             "Tipo",
@@ -556,11 +608,12 @@ def write_qa_report(
             "Pair RACI",
             "Attiva",
             "Conf.",
+            "Warning",
             "Evidence",
             "PDF",
         ],
         package_rows,
-        [22, 12, 14, 14, 18, 14, 28, 36, 8, 8, 40, 22],
+        [22, 12, 20, 14, 14, 18, 14, 28, 36, 8, 8, 38, 40, 22],
     )
     row += 1
     row = _write_section_title(ws, row, "Coppie rimosse")
@@ -612,6 +665,55 @@ def write_qa_report(
         [12, 28, 40, 28, 12, 18, 22],
     )
 
+    if excl_audit.get("drop_guard_triggered"):
+        row += 1
+        row = _write_section_title(
+            ws, row, "2d segnalati ma non applicati (circuit breaker)"
+        )
+        flagged_docs = excl_audit.get("flagged_documents") or []
+        flagged_rows = [
+            [
+                d.get("discipline_code", ""),
+                d.get("chapter_name", ""),
+                d.get("title", ""),
+                d.get("title_key", ""),
+                d.get("exclude_level", ""),
+                d.get("label", ""),
+                d.get("llm_reason", d.get("reason", "")),
+            ]
+            for d in flagged_docs
+        ] or [["—", "—", "—", "—", "—", "—", "Nessun dettaglio"]]
+        row = _write_table(
+            ws,
+            row,
+            ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Livello", "Label", "Motivo"],
+            flagged_rows,
+            [12, 28, 40, 28, 12, 18, 30],
+        )
+
+    doc_llm_rows = excl_audit.get("document_llm_audit") or []
+    invalid_doc_rows = [
+        [
+            item.get("title_key", ""),
+            item.get("outcome", ""),
+            item.get("exclusion_label", ""),
+            item.get("source_pdf", ""),
+            str(item.get("raw", ""))[:300],
+        ]
+        for item in doc_llm_rows
+        if item.get("outcome") != "excluded"
+    ]
+    if invalid_doc_rows:
+        row += 1
+        row = _write_section_title(ws, row, "Audit mapping document-level")
+        row = _write_table(
+            ws,
+            row,
+            ["TitleKey", "Esito", "Esclusione", "PDF", "Raw"],
+            invalid_doc_rows,
+            [30, 20, 28, 24, 50],
+        )
+
     row += 1
     row = _write_section_title(
         ws, row, "Documenti senza base nello SoW (Step 3e)"
@@ -621,12 +723,21 @@ def write_qa_report(
     if gate_audit.get("discarded_excessive_drop"):
         gate_rows = [
             [
+                d.get("discipline_code", ""),
+                d.get("chapter_name", ""),
+                d.get("title", ""),
+                d.get("title_key", ""),
+                "NON APPLICATO — " + (d.get("reason", "") or "circuit breaker"),
+            ]
+            for d in (gate_audit.get("flagged_documents") or [])
+        ] or [
+            [
                 "—",
                 "—",
                 "—",
                 "—",
                 f"Risultato scartato: {gate_audit.get('documents_flagged', 0)} documenti "
-                f"segnalati su {gate_audit.get('candidates_before', 0)} (soglia superata)",
+                f"segnalati su {gate_audit.get('candidates_before', 0)}",
             ]
         ]
     elif gate_docs:
@@ -782,7 +893,9 @@ def write_qa_report(
             value="Gap non disponibile — confronto Renco assente.",
         )
     else:
-        gap_summary, gap_detail = _build_gap_analysis_rows(renco, normalized)
+        gap_summary, gap_detail = _build_gap_analysis_rows(
+            renco, normalized, selected
+        )
         row = _write_section_title(ws, row, "Riepilogo gap vs MDR Renco")
         row = _write_table(
             ws, row, ["Metrica", "Valore", "Nota"], gap_summary, [36, 10, 44]
@@ -796,11 +909,11 @@ def write_qa_report(
                     "Disciplina",
                     "Capitolo",
                     "Titolo RACI",
-                    "In scope run",
+                    "Stato scope run",
                     "Doc Renco (coppia)",
                 ],
                 gap_detail,
-                [10, 28, 44, 14, 16],
+                [10, 28, 44, 22, 16],
             )
         else:
             ws.cell(row=row, column=1, value="(nessun gap — overlap completo)")

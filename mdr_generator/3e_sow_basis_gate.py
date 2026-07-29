@@ -23,6 +23,7 @@ _CATALOG_CHUNK = 90
 # A single bad LLM answer must not wipe the register: above this share of dropped
 # candidates the gate result is discarded and reported in the audit.
 _MAX_DROP_RATIO = 0.5
+_MAX_CUMULATIVE_DROP_RATIO = 0.7
 
 
 @dataclass
@@ -86,6 +87,8 @@ def run_sow_basis_gate(
     json_dir: Path,
     *,
     model: Optional[str] = None,
+    initial_candidate_count: Optional[int] = None,
+    already_dropped: int = 0,
 ) -> Tuple[List[RaciCandidate], dict]:
     """Drop candidates that every SoW PDF reports as having no basis in the project."""
     audit: dict = {
@@ -99,6 +102,10 @@ def run_sow_basis_gate(
         "dropped_documents": [],
         "dropped_by_pair": {},
         "discarded_excessive_drop": False,
+        "guard_reasons": [],
+        "flagged_documents": [],
+        "max_pass_drop_ratio": _MAX_DROP_RATIO,
+        "max_cumulative_drop_ratio": _MAX_CUMULATIVE_DROP_RATIO,
     }
     if not candidates or not pdf_paths:
         audit["candidates_after"] = len(candidates)
@@ -137,9 +144,40 @@ def run_sow_basis_gate(
     drop_keys = {key for key, pdfs in votes.items() if len(pdfs) == total_pdfs}
     audit["invalid_title_keys"] = invalid
 
-    if len(drop_keys) > _MAX_DROP_RATIO * len(candidates):
+    candidate_map = {candidate.title_key: candidate for candidate in candidates}
+    flagged_rows = [
+        {
+            "title_key": key,
+            "title": candidate_map[key].title,
+            "discipline_code": candidate_map[key].discipline_code,
+            "chapter_name": candidate_map[key].chapter_name,
+            "reason": reasons.get(key, ""),
+            "pdf_votes": sorted(votes.get(key, set())),
+        }
+        for key in sorted(drop_keys)
+    ]
+    initial_count = initial_candidate_count or len(candidates)
+    pass_ratio = len(drop_keys) / len(candidates) if candidates else 0.0
+    cumulative_ratio = (
+        (max(0, already_dropped) + len(drop_keys)) / initial_count
+        if initial_count
+        else 0.0
+    )
+    guard_reasons: List[str] = []
+    if pass_ratio > _MAX_DROP_RATIO:
+        guard_reasons.append("pass_drop_ratio")
+    if cumulative_ratio > _MAX_CUMULATIVE_DROP_RATIO:
+        guard_reasons.append("cumulative_drop_ratio")
+
+    audit["pass_drop_ratio_flagged"] = round(pass_ratio, 4)
+    audit["cumulative_drop_ratio_flagged"] = round(cumulative_ratio, 4)
+    audit["initial_candidate_count"] = initial_count
+    audit["already_dropped"] = max(0, already_dropped)
+    if guard_reasons:
         audit["discarded_excessive_drop"] = True
         audit["documents_flagged"] = len(drop_keys)
+        audit["flagged_documents"] = flagged_rows
+        audit["guard_reasons"] = guard_reasons
         audit["candidates_after"] = len(candidates)
         save_json(json_dir / "sow_basis_gate_audit.json", audit)
         return candidates, audit

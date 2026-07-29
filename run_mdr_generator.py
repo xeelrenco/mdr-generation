@@ -374,6 +374,8 @@ def main() -> int:
             )
 
         normalized = consolidate_normalized_signals(normalized)
+        normalized_before_exclusions = list(normalized)
+        candidates_before_exclusions = fetch_raci_candidates(conn, normalized)
         if raw_signals:
             scope_payload: dict = {}
             if raw_json.exists():
@@ -411,18 +413,28 @@ def main() -> int:
         print(f"  -> {len(profiles)} profili TitleKey")
 
         print("Step 3: candidati RACI da raci_matrix.v_DocumentsEnriched...")
-        candidates = fetch_raci_candidates(conn, normalized)
+        candidates = candidates_before_exclusions
         candidates, exclusion_audit = apply_document_exclusions(
             candidates,
             scope_exclusions,
+            scope_pdfs,
             json_dir,
             pair_audit=exclusion_audit,
             model=args.scope_llm_model,
         )
-        print(
-            f"  -> {len(candidates)} candidati "
-            f"(-{exclusion_audit.get('documents_dropped', 0)} esclusi SoW)"
-        )
+        if exclusion_audit.get("drop_guard_triggered"):
+            normalized = normalized_before_exclusions
+            save_normalized(normalized, uncertain, norm_json)
+            print(
+                "  -> risultato 2d non applicato: "
+                f"{exclusion_audit.get('documents_flagged', 0)} documenti segnalati "
+                f"su {exclusion_audit.get('candidates_before', 0)}"
+            )
+        else:
+            print(
+                f"  -> {len(candidates)} candidati "
+                f"(-{exclusion_audit.get('documents_dropped', 0)} esclusi SoW)"
+            )
 
         print("Step 3e: verifica base SoW per documento (temi non previsti)...")
         candidates, basis_gate_audit = run_sow_basis_gate(
@@ -430,6 +442,10 @@ def main() -> int:
             candidates,
             json_dir,
             model=args.scope_llm_model,
+            initial_candidate_count=len(candidates_before_exclusions),
+            already_dropped=(
+                len(candidates_before_exclusions) - len(candidates)
+            ),
         )
         save_candidates_csv(candidates, candidates_csv)
         if basis_gate_audit.get("discarded_excessive_drop"):
@@ -599,7 +615,19 @@ def main() -> int:
         scope_exclusions_active=exclusion_audit.get("exclusions_active", 0),
         scope_pairs_dropped=exclusion_audit.get("pairs_dropped", 0),
         scope_docs_dropped=exclusion_audit.get("documents_dropped", 0),
+        scope_docs_flagged=exclusion_audit.get("documents_flagged", 0),
+        scope_exclusion_guard_triggered=exclusion_audit.get(
+            "drop_guard_triggered", False
+        ),
         sow_basis_docs_dropped=basis_gate_audit.get("documents_dropped", 0),
+        sow_basis_docs_flagged=basis_gate_audit.get("documents_flagged", 0),
+        sow_basis_guard_triggered=basis_gate_audit.get(
+            "discarded_excessive_drop", False
+        ),
+        candidates_before_exclusions=len(candidates_before_exclusions),
+        candidates_after_2d=exclusion_audit.get(
+            "candidates_after", len(candidates_before_exclusions)
+        ),
         document_scope_decisions=len(scope_decisions),
         mdr_line_items=len(line_items),
         duration_populated_count=duration_populated,
