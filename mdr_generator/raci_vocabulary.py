@@ -74,61 +74,177 @@ _MDR_SUFFIX_LANGUAGE_RULES = """LANGUAGE (MDR title suffix fields: label, sow_sp
 - Historical or few-shot examples illustrate scope/granularity only — suffix language is always English."""
 
 
-def build_scope_exclusion_prompt() -> str:
-    """Prompt for step 2d: extract client-responsibility / out-of-scope packages from SoW."""
-    return """You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
+def build_scope_exclusion_prompt(vocab: RaciVocabulary) -> str:
+    """Prompt for step 2d: LLM chooses exclusion level against RACI catalog entities."""
+    return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
-Your task: find packages, systems, or work areas that are OUT OF CONTRACTOR DOCUMENTATION SCOPE
-because they are:
-- explicitly excluded from the Scope of Work, OR
-- assigned to the Client / Owner / Employer / Committente / "by Others" / "by Client"
-  (and NOT explicitly assigned to the Contractor / Assuntore / EPC contractor for documentation).
+Your task: find work areas OUT OF CONTRACTOR DOCUMENTATION SCOPE because they are:
+- explicitly excluded from the SoW, OR
+- assigned to Client / Owner / Employer / Committente / "by Others" / "by Client"
+  (and NOT explicitly assigned to Contractor / Assuntore for documentation).
 
-Do NOT list packages that the contractor must document. Only exclusions / client-responsibility items.
+Do NOT list areas the contractor must document.
 
-Typical packages to LOOK FOR in the SoW (search hints only — emit only if SoW evidence supports them):
-- civil works / buildings / foundations (except items explicitly given to the contractor)
-- fire & gas / firefighting / FGS
-- lighting / illumination systems
-- electrical substation / switchyard / control room / central control building
-- DCS, MCC, and non-machine electrical/instrument panels (panels not supplied with a machine/package)
+You MUST choose an exclude_level for each finding. Prefer the narrowest correct level:
+- "document" (DEFAULT): only specific MDR documents are out
+- "pair": one or more exact RACI pairs (discipline_code + chapter_name) are out
+- "chapter": a ChapterName is out across ALL disciplines (same chapter in every discipline)
+- "discipline": an entire RACI discipline is out (rare; e.g. all civil works)
 
-For EACH exclusion found, output one object:
-- package: short English label (e.g. "civil works", "fire and gas", "lighting")
-- package_key: snake_case key (e.g. civil, fire_gas, lighting, substation_control_room, dcs_mcc_panels)
+ALLOWED RACI DISCIPLINES (use exact codes only):
+{vocab.discipline_prompt_block()}
+
+ALLOWED RACI CHAPTER NAMES (use exact strings only; for exclude_level="chapter"):
+{vocab.chapter_prompt_block()}
+
+ALLOWED RACI PAIRS — discipline_code | chapter_name (use exact strings only; for exclude_level="pair"):
+{vocab.pairs_prompt_block()}
+
+For EACH exclusion, output one object:
+- label: short English name of the excluded SoW area (e.g. "civil works", "lighting")
+- exclude_level: "document" | "pair" | "chapter" | "discipline"
 - responsibility: "committente" | "assuntore" | "unknown"
-- explicit_assuntore: true ONLY if the SoW clearly assigns this package's documentation to the contractor
+- explicit_assuntore: true ONLY if SoW clearly assigns this documentation to the contractor
 - exclusion_type: "excluded_from_scope" | "client_responsibility"
-- suggested_discipline_codes: list of RACI discipline codes likely impacted (e.g. ["CIV"], ["ELE","ICT"])
-- chapter_keywords: short uppercase-ish keywords to match RACI chapter names (e.g. ["LIGHTING","FGS","BUILDING"])
-- title_keywords: lowercase keywords to match RACI document titles (e.g. ["lighting","fire and gas","dcs","mcc","substation","control room"])
+- discipline_codes: list of exact discipline codes from the allowed list
+  - required for exclude_level="discipline"
+  - optional hint otherwise
+- chapter_names: list of exact chapter names from the allowed chapter list
+  - required for exclude_level="chapter"
+  - empty otherwise
+- pairs: list of {{"discipline_code","chapter_name"}} using ONLY allowed pairs
+  - required for exclude_level="pair" (one or more pairs)
+  - empty otherwise
 - confidence: "strong" | "medium" | "weak"
 - source_pages: 1-based PDF page numbers
 - evidence_quote: verbatim SoW quote (max 250 chars)
 
+HOW TO CHOOSE THE LEVEL — match the breadth of the SoW statement:
+- The SoW denies or excludes a WHOLE SYSTEM or WHOLE WORK CATEGORY
+  ("no works are foreseen on X", "no modification to X", "X is excluded from the
+  contractor scope", "X is carried out by the Client"):
+  → use "pair" for every allowed pair whose chapter covers that system,
+    or "chapter" when the same chapter belongs to several disciplines.
+  → do NOT use "document" for these: the whole documentation of that system is out.
+- The SoW removes only a specific activity or deliverable inside a system that otherwise
+  stays in scope → use "document".
+- The SoW removes an entire engineering discipline → use "discipline".
+
+When you choose "pair" or "chapter", list ALL matching entries, not just the closest one.
+If the SoW keeps a few named deliverables of an otherwise excluded system (e.g. loads or
+layouts to be sent to the Client), still exclude at pair/chapter level and note the kept
+deliverables in evidence_quote — a later stage handles them.
+
 Rules:
-- Require SoW evidence for every exclusion — do not invent packages from general EPC practice.
-- If the SoW says work is by Client/Committente and does NOT explicitly give documentation to the Assuntore,
-  set responsibility="committente" and explicit_assuntore=false.
-- If a package is excluded from scope entirely, use exclusion_type="excluded_from_scope".
-- If unsure, omit the package (prefer false negatives over false positives).
-- Respond with JSON only: {"exclusions": [...]}
+- Require SoW evidence — do not invent exclusions from general EPC practice.
+- Never invent discipline codes, chapter names, or pairs — copy exactly from the allowed lists.
+- If SoW says Client/Committente and does NOT give documentation to Assuntore:
+  responsibility="committente", explicit_assuntore=false.
+- If unsure whether an area is excluded at all, omit it; but once the SoW clearly excludes
+  a system, do not narrow the level out of caution.
+- Respond with JSON only: {{"exclusions": [...]}}
 """
 
 
 def build_scope_exclusion_chunk_prompt(
+    vocab: RaciVocabulary,
     page_start: int,
     page_end: int,
     total_pages: int,
 ) -> str:
-    base = build_scope_exclusion_prompt()
+    base = build_scope_exclusion_prompt(vocab)
     return (
         f"{base}\n\n"
         f"CHUNK CONTEXT: This upload is an excerpt of the full Scope of Work PDF "
         f"(global pages {page_start}–{page_end} of {total_pages} total pages).\n"
         f"- In source_pages use GLOBAL 1-based page numbers within {page_start}–{page_end} only.\n"
-        f"- Report every client-responsibility / out-of-scope package visible in this excerpt.\n"
+        f"- Report every client-responsibility / out-of-scope area visible in this excerpt.\n"
     )
+
+
+def build_document_exclusion_prompt(
+    exclusion: Any,
+    catalog_block: str,
+) -> str:
+    """Second pass: map ONE document-level SoW exclusion to exact TitleKeys."""
+
+    def _field(name: str) -> Any:
+        if isinstance(exclusion, dict):
+            return exclusion.get(name)
+        return getattr(exclusion, name, None)
+
+    label = _field("label") or ""
+    evidence = _field("evidence_quote") or ""
+    excl_type = _field("exclusion_type") or ""
+    responsibility = _field("responsibility") or ""
+    discs = ", ".join(_field("discipline_codes") or []) or "(any)"
+
+    return f"""You map ONE Scope-of-Work DOCUMENTATION exclusion to exact RACI catalog documents.
+
+EXCLUDED AREA (already decided by a previous stage — do not question it, do not add others):
+- label: {label}
+- type: {excl_type}
+- responsibility: {responsibility}
+- likely disciplines: {discs}
+- SoW evidence: {evidence}
+
+CANDIDATE MDR DOCUMENTS (TitleKey | RACI Title | Discipline | Chapter):
+{catalog_block}
+
+Return every TitleKey from the candidate list whose subject belongs to the excluded area.
+
+Rules:
+- Use exact title_key strings from the candidate list only.
+- Be complete: when a system or work category is out, its whole documentation set is out —
+  specifications, data sheets, calculation reports, layouts, drawings, lists, MTO,
+  bid evaluations, procedures and inspection documents of that system all count.
+- Judge by the SUBJECT of the title, not by the wording of the evidence: the SoW quote is
+  in Italian and the titles are in English.
+- Keep a document only if its subject is genuinely a different system that stays in
+  contractor scope, or if the evidence itself requires the contractor to issue it.
+- If nothing matches, return an empty list.
+- Respond with JSON only:
+  {{"excluded_documents": [{{"title_key": "...", "reason": "..."}}]}}
+"""
+
+
+def build_sow_basis_gate_prompt(
+    catalog_block: str,
+    *,
+    pdf_label: str = "",
+) -> str:
+    """Generalist gate: keep a candidate document only if the SoW gives it a basis."""
+    pdf_hint = f" ({pdf_label})" if pdf_label else ""
+    return f"""You check a Master Document Register draft against the attached Scope of Work
+(SoW) PDF{pdf_hint} for an EPC/engineering project.
+
+The candidate documents below were taken from a standard company catalog because their
+discipline and chapter are in scope. The chapter being in scope does NOT mean every
+document of that chapter belongs to THIS project.
+
+CANDIDATE MDR DOCUMENTS (TitleKey | RACI Title | Discipline | Chapter):
+{catalog_block}
+
+For each candidate decide whether the SoW gives it a basis:
+- "supported": the SoW describes the system, equipment, material, activity or deliverable
+  this document is about — including as part of the works, the supply, the tests, the
+  interfaces or the required engineering. Project-wide engineering deliverables
+  (design criteria, specifications, procedures, layouts, calculations) of a system that
+  IS present in the SoW are supported.
+- "unsupported": the subject of this document does not exist in this project — the SoW
+  never introduces that system, equipment, material or work category at all.
+
+Rules:
+- Base the decision on the whole attached SoW, not on the title wording alone.
+- Do NOT mark a document unsupported just because the SoW is brief about it: a single
+  mention of the system, or the system being an obvious part of the described plant,
+  is enough to keep it.
+- Do NOT reason about who is responsible (Client vs Contractor); another stage handles that.
+- Use exact title_key strings from the candidate list only.
+- Report ONLY the unsupported ones; everything not reported is kept.
+- Respond with JSON only:
+  {{"unsupported_documents": [{{"title_key": "...", "reason": "..."}}]}}
+"""
 
 
 def build_scope_pdf_prompt(vocab: RaciVocabulary) -> str:

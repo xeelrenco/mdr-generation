@@ -208,6 +208,7 @@ class PipelineSummary:
     scope_exclusions_active: int = 0
     scope_pairs_dropped: int = 0
     scope_docs_dropped: int = 0
+    sow_basis_docs_dropped: int = 0
     document_scope_decisions: int = 0
     mdr_line_items: int = 0
     duration_populated_count: int = 0

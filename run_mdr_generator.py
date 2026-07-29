@@ -69,6 +69,7 @@ run_scope_exclusion_pass = _im(
 apply_document_exclusions = _im(
     "mdr_generator.2d_scope_exclusions"
 ).apply_document_exclusions
+run_sow_basis_gate = _im("mdr_generator.3e_sow_basis_gate").run_sow_basis_gate
 write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
 run_document_scope_pass = _im("mdr_generator.3b_document_scope").run_document_scope_pass
@@ -283,6 +284,7 @@ def main() -> int:
     renco_cmp = None
     gap_pass_audit: dict = {"enabled": False}
     exclusion_audit: dict = {"enabled": True}
+    basis_gate_audit: dict = {"enabled": True}
     discipline_short_codes: dict[str, str] = {}
     line_items = []
     scope_decisions = []
@@ -385,11 +387,17 @@ def main() -> int:
             scope_pdfs,
             normalized,
             json_dir,
+            vocab,
             model=args.scope_llm_model,
         )
         save_normalized(normalized, uncertain, norm_json)
+        by_lvl = exclusion_audit.get("by_level_active") or {}
         print(
-            f"  -> {exclusion_audit.get('exclusions_active', 0)} ambiti esclusi; "
+            f"  -> {exclusion_audit.get('exclusions_active', 0)} ambiti attivi "
+            f"(discipline={by_lvl.get('discipline', 0)}, "
+            f"chapter={by_lvl.get('chapter', 0)}, "
+            f"pair={by_lvl.get('pair', 0)}, "
+            f"document={by_lvl.get('document', 0)}); "
             f"coppie {exclusion_audit.get('pairs_before', '?')} -> "
             f"{exclusion_audit.get('pairs_after', '?')} "
             f"(-{exclusion_audit.get('pairs_dropped', 0)})"
@@ -405,13 +413,36 @@ def main() -> int:
         print("Step 3: candidati RACI da raci_matrix.v_DocumentsEnriched...")
         candidates = fetch_raci_candidates(conn, normalized)
         candidates, exclusion_audit = apply_document_exclusions(
-            candidates, scope_exclusions, json_dir, pair_audit=exclusion_audit
+            candidates,
+            scope_exclusions,
+            json_dir,
+            pair_audit=exclusion_audit,
+            model=args.scope_llm_model,
         )
-        save_candidates_csv(candidates, candidates_csv)
         print(
             f"  -> {len(candidates)} candidati "
             f"(-{exclusion_audit.get('documents_dropped', 0)} esclusi SoW)"
         )
+
+        print("Step 3e: verifica base SoW per documento (temi non previsti)...")
+        candidates, basis_gate_audit = run_sow_basis_gate(
+            scope_pdfs,
+            candidates,
+            json_dir,
+            model=args.scope_llm_model,
+        )
+        save_candidates_csv(candidates, candidates_csv)
+        if basis_gate_audit.get("discarded_excessive_drop"):
+            print(
+                "  -> risultato scartato: "
+                f"{basis_gate_audit.get('documents_flagged', 0)} documenti segnalati "
+                f"su {basis_gate_audit.get('candidates_before', 0)} (soglia superata)"
+            )
+        else:
+            print(
+                f"  -> {len(candidates)} candidati "
+                f"(-{basis_gate_audit.get('documents_dropped', 0)} senza base nello SoW)"
+            )
 
         print("Step 4: ranking storico (solo MATCH consolidati)...")
         ranked = apply_historical_ranking(conn, candidates)
@@ -568,6 +599,7 @@ def main() -> int:
         scope_exclusions_active=exclusion_audit.get("exclusions_active", 0),
         scope_pairs_dropped=exclusion_audit.get("pairs_dropped", 0),
         scope_docs_dropped=exclusion_audit.get("documents_dropped", 0),
+        sow_basis_docs_dropped=basis_gate_audit.get("documents_dropped", 0),
         document_scope_decisions=len(scope_decisions),
         mdr_line_items=len(line_items),
         duration_populated_count=duration_populated,
@@ -597,6 +629,7 @@ def main() -> int:
         renco=renco_cmp,
         llm_usage=llm_usage,
         exclusion_audit=exclusion_audit,
+        basis_gate_audit=basis_gate_audit,
     )
     print(f"Step 7: report qualità -> {report_path}")
     print(f"Tempo totale pipeline: {elapsed_label}")

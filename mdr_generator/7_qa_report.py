@@ -156,6 +156,7 @@ def write_qa_report(
     renco: Optional[RencoComparison] = None,
     llm_usage: Optional[LlmUsageSummary] = None,
     exclusion_audit: Optional[dict] = None,
+    basis_gate_audit: Optional[dict] = None,
 ) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
@@ -192,7 +193,8 @@ def write_qa_report(
         (
             "Esclusioni_SoW",
             "",
-            "Ambiti committente/fuori scope (Step 2d) e pair/documenti rimossi.",
+            "Ambiti committente/fuori scope (Step 2d), pair/documenti rimossi e "
+            "documenti senza base nello SoW (Step 3e).",
         ),
         (
             "MDR_generato",
@@ -272,6 +274,11 @@ def write_qa_report(
             "   — documenti rimossi",
             summary.scope_docs_dropped,
             "TitleKey candidati esclusi per package SoW",
+        ],
+        [
+            "3e. Doc senza base nello SoW",
+            summary.sow_basis_docs_dropped,
+            "Temi non previsti dal progetto (gate generalista)",
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
         [
@@ -499,12 +506,18 @@ def write_qa_report(
     if excl_items:
         package_rows = [
             [
-                e.get("package", ""),
-                e.get("package_key", ""),
+                e.get("label", e.get("package", "")),
+                e.get("exclude_level", ""),
                 e.get("responsibility", ""),
                 "Sì" if e.get("explicit_assuntore") else "No",
                 e.get("exclusion_type", ""),
-                ",".join(e.get("suggested_discipline_codes") or []),
+                ",".join(e.get("discipline_codes") or e.get("suggested_discipline_codes") or []),
+                "; ".join(e.get("chapter_names") or []),
+                "; ".join(
+                    f"{p.get('discipline_code')}|{p.get('chapter_name')}"
+                    for p in (e.get("pairs") or [])
+                    if isinstance(p, dict)
+                ),
                 "Sì" if e.get("should_exclude") else "No",
                 e.get("confidence", ""),
                 (e.get("evidence_quote") or "")[:300],
@@ -513,24 +526,41 @@ def write_qa_report(
             for e in excl_items
         ]
     else:
-        package_rows = [["—", "—", "—", "—", "—", "—", "—", "—", "Nessuna esclusione trovata", "—"]]
+        package_rows = [
+            [
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "Nessuna esclusione trovata",
+                "—",
+            ]
+        ]
     row = _write_table(
         ws,
         row,
         [
-            "Package",
-            "Key",
+            "Label",
+            "Livello",
             "Responsabilità",
             "Assuntore esplicito",
             "Tipo",
             "Discipline",
+            "Chapter names",
+            "Pair RACI",
             "Attiva",
             "Conf.",
             "Evidence",
             "PDF",
         ],
         package_rows,
-        [22, 18, 14, 14, 18, 14, 8, 8, 40, 22],
+        [22, 12, 14, 14, 18, 14, 28, 36, 8, 8, 40, 22],
     )
     row += 1
     row = _write_section_title(ws, row, "Coppie rimosse")
@@ -540,20 +570,21 @@ def write_qa_report(
             [
                 d.get("discipline_code", ""),
                 d.get("chapter_name", ""),
-                d.get("package", ""),
+                d.get("exclude_level", ""),
+                d.get("label", d.get("package", "")),
                 d.get("reason", ""),
                 (d.get("evidence_quote") or "")[:250],
             ]
             for d in dropped_pairs
         ]
     else:
-        pair_rows = [["—", "—", "—", "Nessuna coppia rimossa", "—"]]
+        pair_rows = [["—", "—", "—", "—", "Nessuna coppia rimossa", "—"]]
     row = _write_table(
         ws,
         row,
-        ["Disciplina", "Capitolo", "Package", "Motivo", "Evidence"],
+        ["Disciplina", "Capitolo", "Livello", "Label", "Motivo", "Evidence"],
         pair_rows,
-        [12, 36, 22, 22, 40],
+        [12, 36, 12, 22, 22, 40],
     )
     row += 1
     row = _write_section_title(ws, row, "Documenti RACI rimossi")
@@ -565,19 +596,58 @@ def write_qa_report(
                 d.get("chapter_name", ""),
                 d.get("title", ""),
                 d.get("title_key", ""),
-                d.get("package", ""),
+                d.get("exclude_level", ""),
+                d.get("label", d.get("package", "")),
                 d.get("reason", ""),
             ]
             for d in dropped_docs
         ]
     else:
-        doc_rows = [["—", "—", "—", "—", "—", "Nessun documento rimosso"]]
+        doc_rows = [["—", "—", "—", "—", "—", "—", "Nessun documento rimosso"]]
+    row = _write_table(
+        ws,
+        row,
+        ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Livello", "Label", "Motivo"],
+        doc_rows,
+        [12, 28, 40, 28, 12, 18, 22],
+    )
+
+    row += 1
+    row = _write_section_title(
+        ws, row, "Documenti senza base nello SoW (Step 3e)"
+    )
+    gate_audit = basis_gate_audit or {}
+    gate_docs = gate_audit.get("dropped_documents") or []
+    if gate_audit.get("discarded_excessive_drop"):
+        gate_rows = [
+            [
+                "—",
+                "—",
+                "—",
+                "—",
+                f"Risultato scartato: {gate_audit.get('documents_flagged', 0)} documenti "
+                f"segnalati su {gate_audit.get('candidates_before', 0)} (soglia superata)",
+            ]
+        ]
+    elif gate_docs:
+        gate_rows = [
+            [
+                d.get("discipline_code", ""),
+                d.get("chapter_name", ""),
+                d.get("title", ""),
+                d.get("title_key", ""),
+                d.get("reason", ""),
+            ]
+            for d in gate_docs
+        ]
+    else:
+        gate_rows = [["—", "—", "—", "—", "Nessun documento rimosso"]]
     _write_table(
         ws,
         row,
-        ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Package", "Motivo"],
-        doc_rows,
-        [12, 28, 40, 28, 18, 22],
+        ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Motivo"],
+        gate_rows,
+        [12, 28, 40, 28, 46],
     )
 
     # --- Foglio 4: MDR_generato ---

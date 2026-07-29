@@ -1,4 +1,11 @@
-"""Step 2d: SoW client-responsibility / out-of-scope package exclusions (always on)."""
+"""Step 2d: SoW exclusions — LLM chooses level on RACI entities.
+
+Levels (narrowest first):
+- document: TitleKeys (second LLM pass)
+- pair: exact (discipline_code, chapter_name)
+- chapter: ChapterName across ALL disciplines
+- discipline: whole discipline
+"""
 
 from __future__ import annotations
 
@@ -10,11 +17,14 @@ from .config import cfg_bool, cfg_int
 from .models import NormalizedSignal, RaciCandidate
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import (
+    RaciVocabulary,
+    build_document_exclusion_prompt,
     build_scope_exclusion_chunk_prompt,
     build_scope_exclusion_prompt,
 )
 from .scope_pdf import (
     call_scope_llm_pdf,
+    call_scope_llm_text,
     chunk_page_ranges,
     extract_scope_pdf_pages,
     pdf_page_count,
@@ -22,24 +32,20 @@ from .scope_pdf import (
 )
 from .utils import save_json
 
-# When SoW excludes these packages, drop the whole RACI discipline(s).
-_FULL_DISCIPLINE_BY_PACKAGE = {
-    "civil": {"CIV"},
-    "civil_works": {"CIV"},
-    "opere_civili": {"CIV"},
-}
+EXCLUDE_LEVELS = ("document", "pair", "chapter", "discipline")
+_DOC_CATALOG_CHUNK = 200
 
 
 @dataclass
 class ScopeExclusion:
-    package: str
-    package_key: str
+    label: str
+    exclude_level: str  # document | pair | chapter | discipline
     responsibility: str
     explicit_assuntore: bool
     exclusion_type: str
-    suggested_discipline_codes: List[str] = field(default_factory=list)
-    chapter_keywords: List[str] = field(default_factory=list)
-    title_keywords: List[str] = field(default_factory=list)
+    discipline_codes: List[str] = field(default_factory=list)
+    chapter_names: List[str] = field(default_factory=list)
+    pairs: List[Tuple[str, str]] = field(default_factory=list)
     confidence: str = "medium"
     source_pages: List[int] = field(default_factory=list)
     evidence_quote: str = ""
@@ -54,14 +60,16 @@ class ScopeExclusion:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "package": self.package,
-            "package_key": self.package_key,
+            "label": self.label,
+            "exclude_level": self.exclude_level,
             "responsibility": self.responsibility,
             "explicit_assuntore": self.explicit_assuntore,
             "exclusion_type": self.exclusion_type,
-            "suggested_discipline_codes": list(self.suggested_discipline_codes),
-            "chapter_keywords": list(self.chapter_keywords),
-            "title_keywords": list(self.title_keywords),
+            "discipline_codes": list(self.discipline_codes),
+            "chapter_names": list(self.chapter_names),
+            "pairs": [
+                {"discipline_code": d, "chapter_name": c} for d, c in self.pairs
+            ],
             "confidence": self.confidence,
             "source_pages": list(self.source_pages),
             "evidence_quote": self.evidence_quote,
@@ -70,35 +78,20 @@ class ScopeExclusion:
         }
 
 
-def _normalize_key(value: str) -> str:
-    return " ".join((value or "").strip().lower().replace("_", " ").split())
-
-
-def _package_full_disciplines(excl: ScopeExclusion) -> Set[str]:
-    key = (excl.package_key or "").strip().lower()
-    if key in _FULL_DISCIPLINE_BY_PACKAGE:
-        return set(_FULL_DISCIPLINE_BY_PACKAGE[key])
-    pkg = _normalize_key(excl.package).replace(" ", "_")
-    if pkg in _FULL_DISCIPLINE_BY_PACKAGE:
-        return set(_FULL_DISCIPLINE_BY_PACKAGE[pkg])
-    if "civil" in key or "civil" in pkg:
-        return {"CIV"}
-    return set()
-
-
 def _parse_exclusions(
     data: Dict[str, Any],
     *,
     source_pdf: str,
+    vocab: RaciVocabulary,
 ) -> List[ScopeExclusion]:
     out: List[ScopeExclusion] = []
     for item in data.get("exclusions") or []:
         if not isinstance(item, dict):
             continue
-        package = (item.get("package") or "").strip()
-        if not package:
+        label = (item.get("label") or item.get("package") or "").strip()
+        if not label:
             continue
-        package_key = (item.get("package_key") or package).strip().lower().replace(" ", "_")
+        level = (item.get("exclude_level") or "document").strip().lower()
         responsibility = (item.get("responsibility") or "unknown").strip().lower()
         if responsibility not in ("committente", "assuntore", "unknown"):
             responsibility = "unknown"
@@ -108,33 +101,57 @@ def _parse_exclusions(
         conf = (item.get("confidence") or "medium").strip().lower()
         if conf not in ("strong", "medium", "weak"):
             conf = "medium"
-        pages_raw = item.get("source_pages") or []
-        pages = [int(p) for p in pages_raw if str(p).isdigit()]
+        pages = [int(p) for p in (item.get("source_pages") or []) if str(p).isdigit()]
+
+        raw_discs = item.get("discipline_codes") or item.get("suggested_discipline_codes") or []
         discs = [
             str(d).strip().upper()
-            for d in (item.get("suggested_discipline_codes") or [])
-            if str(d).strip()
+            for d in raw_discs
+            if str(d).strip().upper() in vocab.discipline_codes
         ]
-        chap_kw = [
-            str(k).strip()
-            for k in (item.get("chapter_keywords") or [])
-            if str(k).strip()
-        ]
-        title_kw = [
-            str(k).strip().lower()
-            for k in (item.get("title_keywords") or [])
-            if str(k).strip()
-        ]
+
+        chapters: List[str] = []
+        for ch in item.get("chapter_names") or []:
+            name = str(ch).strip()
+            if name in vocab.chapter_names:
+                chapters.append(name)
+
+        pairs: List[Tuple[str, str]] = []
+        for p in item.get("pairs") or []:
+            if not isinstance(p, dict):
+                continue
+            disc = str(p.get("discipline_code") or "").strip().upper()
+            chap = str(p.get("chapter_name") or "").strip()
+            if disc and chap and (disc, chap) in vocab.canonical_pairs:
+                pairs.append((disc, chap))
+
+        # Backward compat: old "chapter" meant exact pair(s).
+        if level == "chapter" and pairs and not chapters:
+            level = "pair"
+        if level not in EXCLUDE_LEVELS:
+            level = "document"
+
+        # Validate level payloads against catalog; downgrade if incomplete.
+        if level == "discipline" and not discs:
+            level = "document"
+        elif level == "chapter" and not chapters:
+            if pairs:
+                level = "pair"
+            else:
+                level = "document"
+        elif level == "pair" and not pairs:
+            level = "document"
+
         out.append(
             ScopeExclusion(
-                package=package,
-                package_key=package_key,
+                label=label,
+                exclude_level=level,
                 responsibility=responsibility,
                 explicit_assuntore=bool(item.get("explicit_assuntore")),
                 exclusion_type=exclusion_type,
-                suggested_discipline_codes=discs,
-                chapter_keywords=chap_kw,
-                title_keywords=title_kw,
+                discipline_codes=discs,
+                chapter_names=chapters,
+                pairs=pairs,
                 confidence=conf,
                 source_pages=pages,
                 evidence_quote=(item.get("evidence_quote") or "")[:250],
@@ -148,10 +165,17 @@ def _dedupe_exclusions(items: List[ScopeExclusion]) -> List[ScopeExclusion]:
     best: Dict[str, ScopeExclusion] = {}
     rank = {"strong": 3, "medium": 2, "weak": 1}
     for item in items:
-        key = item.package_key or _normalize_key(item.package)
-        prev = best.get(key)
+        key = (
+            item.exclude_level,
+            item.label.strip().lower(),
+            tuple(sorted(item.discipline_codes)),
+            tuple(sorted(item.chapter_names)),
+            tuple(sorted(item.pairs)),
+        )
+        key_s = repr(key)
+        prev = best.get(key_s)
         if prev is None or rank.get(item.confidence, 0) >= rank.get(prev.confidence, 0):
-            best[key] = item
+            best[key_s] = item
     return list(best.values())
 
 
@@ -175,9 +199,10 @@ def _run_exclusion_chunk(
     pdf_bytes: bytes,
     model: Optional[str],
     total_pages: int,
+    vocab: RaciVocabulary,
 ) -> Tuple[_ExclChunkJob, List[ScopeExclusion]]:
     prompt = build_scope_exclusion_chunk_prompt(
-        job.page_start, job.page_end, total_pages
+        vocab, job.page_start, job.page_end, total_pages
     )
     chunk_bytes = extract_scope_pdf_pages(pdf_bytes, job.page_start, job.page_end)
     data = call_scope_llm_pdf(
@@ -189,11 +214,12 @@ def _run_exclusion_chunk(
         upload_name=f"{pdf_path.stem}_excl_{job.page_start}_{job.page_end}.pdf",
         stage="pass2d_scope_exclusions",
     )
-    return job, _parse_exclusions(data, source_pdf=pdf_path.name)
+    return job, _parse_exclusions(data, source_pdf=pdf_path.name, vocab=vocab)
 
 
 def extract_scope_exclusions_from_pdfs(
     pdf_paths: List[Path],
+    vocab: RaciVocabulary,
     *,
     model: Optional[str] = None,
 ) -> List[ScopeExclusion]:
@@ -201,28 +227,29 @@ def extract_scope_exclusions_from_pdfs(
     all_items: List[ScopeExclusion] = []
 
     for pdf_path in pdf_paths:
-        print(f"  LLM esclusioni SoW: {pdf_path.name}")
         pdf_bytes = read_scope_pdf_bytes(pdf_path)
         total_pages = pdf_page_count(pdf_bytes)
-
-        if chunk_enabled and total_pages > 0:
+        if chunk_enabled and total_pages > chunk_pages:
             ranges = chunk_page_ranges(total_pages, chunk_pages, overlap)
             jobs = [
-                _ExclChunkJob(idx=i, page_start=ps, page_end=pe)
-                for i, (ps, pe) in enumerate(ranges)
+                _ExclChunkJob(idx=i, page_start=s, page_end=e)
+                for i, (s, e) in enumerate(ranges)
             ]
-            workers = llm_parallel_workers()
 
             def _runner(job: _ExclChunkJob) -> Tuple[_ExclChunkJob, List[ScopeExclusion]]:
                 return _run_exclusion_chunk(
-                    job, pdf_path, pdf_bytes, model, total_pages
+                    job, pdf_path, pdf_bytes, model, total_pages, vocab
                 )
 
-            results = run_parallel(jobs, _runner, max_workers=workers)
-            for _job, items in results:
+            results = run_parallel(
+                jobs,
+                _runner,
+                max_workers=llm_parallel_workers(),
+            )
+            for _, items in results:
                 all_items.extend(items)
         else:
-            prompt = build_scope_exclusion_prompt()
+            prompt = build_scope_exclusion_prompt(vocab)
             data = call_scope_llm_pdf(
                 prompt,
                 pdf_path,
@@ -231,139 +258,297 @@ def extract_scope_exclusions_from_pdfs(
                 pass_id="pass1",
                 stage="pass2d_scope_exclusions",
             )
-            all_items.extend(_parse_exclusions(data, source_pdf=pdf_path.name))
+            all_items.extend(
+                _parse_exclusions(data, source_pdf=pdf_path.name, vocab=vocab)
+            )
 
     return _dedupe_exclusions(all_items)
-
-
-def _pair_matches_exclusion(
-    discipline_code: str,
-    chapter_name: str,
-    excl: ScopeExclusion,
-) -> bool:
-    disc = (discipline_code or "").strip().upper()
-    chap = (chapter_name or "").strip().upper()
-
-    if disc and disc in _package_full_disciplines(excl):
-        return True
-
-    if excl.suggested_discipline_codes and disc in excl.suggested_discipline_codes:
-        if not excl.chapter_keywords:
-            return True
-        for kw in excl.chapter_keywords:
-            if kw and kw.upper() in chap:
-                return True
-        return False
-
-    for kw in excl.chapter_keywords:
-        if kw and kw.upper() in chap:
-            return True
-    return False
-
-
-def _title_matches_exclusion(title: str, title_key: str, excl: ScopeExclusion) -> bool:
-    hay = f"{title_key} {title}".lower()
-    for kw in excl.title_keywords:
-        if kw and kw.lower() in hay:
-            return True
-    if not excl.title_keywords:
-        pkg = _normalize_key(excl.package)
-        if pkg and pkg in hay:
-            return True
-    return False
 
 
 def filter_normalized_by_exclusions(
     normalized: List[NormalizedSignal],
     exclusions: List[ScopeExclusion],
 ) -> Tuple[List[NormalizedSignal], List[dict]]:
+    """Apply discipline / chapter-wide / pair filters (not document-level)."""
     active = [e for e in exclusions if e.should_exclude()]
-    if not active:
+    drop_discs: Set[str] = set()
+    drop_chapters: Set[str] = set()
+    drop_pairs: Set[Tuple[str, str]] = set()
+    disc_by: Dict[str, ScopeExclusion] = {}
+    chap_by: Dict[str, ScopeExclusion] = {}
+    pair_by: Dict[Tuple[str, str], ScopeExclusion] = {}
+
+    for excl in active:
+        if excl.exclude_level == "discipline":
+            for d in excl.discipline_codes:
+                drop_discs.add(d)
+                disc_by[d] = excl
+        elif excl.exclude_level == "chapter":
+            for ch in excl.chapter_names:
+                drop_chapters.add(ch)
+                chap_by[ch] = excl
+        elif excl.exclude_level == "pair":
+            for pair in excl.pairs:
+                drop_pairs.add(pair)
+                pair_by[pair] = excl
+
+    if not drop_discs and not drop_chapters and not drop_pairs:
         return normalized, []
 
     kept: List[NormalizedSignal] = []
     dropped: List[dict] = []
     for sig in normalized:
+        disc = sig.discipline_code
+        chap = sig.chapter_name or ""
+        pair = (disc, chap)
         matched: Optional[ScopeExclusion] = None
-        for excl in active:
-            if _pair_matches_exclusion(sig.discipline_code, sig.chapter_name or "", excl):
-                matched = excl
-                break
+        reason = ""
+        if disc in drop_discs:
+            matched = disc_by[disc]
+            reason = "excluded_discipline"
+        elif chap in drop_chapters:
+            matched = chap_by[chap]
+            reason = "excluded_chapter"
+        elif pair in drop_pairs:
+            matched = pair_by[pair]
+            reason = "excluded_pair"
         if matched is None:
             kept.append(sig)
             continue
         dropped.append(
             {
-                "discipline_code": sig.discipline_code,
-                "chapter_name": sig.chapter_name,
+                "discipline_code": disc,
+                "chapter_name": chap,
                 "scope_section": sig.scope_section,
-                "reason": "excluded_sow_package",
-                "package": matched.package,
-                "package_key": matched.package_key,
+                "reason": reason,
+                "exclude_level": matched.exclude_level,
+                "label": matched.label,
                 "evidence_quote": matched.evidence_quote,
             }
         )
     return kept, dropped
+
+
+def _catalog_lines(candidates: List[RaciCandidate]) -> List[str]:
+    return [
+        f"- {c.title_key} | {c.title} | {c.discipline_code} | {c.chapter_name}"
+        for c in candidates
+    ]
+
+
+def _catalog_chunks_for_exclusion(
+    candidates: List[RaciCandidate],
+    exclusion: ScopeExclusion,
+) -> List[str]:
+    """Catalog restricted to the exclusion's hinted disciplines, split if oversized."""
+    scoped = candidates
+    if exclusion.discipline_codes:
+        hinted = set(exclusion.discipline_codes)
+        scoped = [c for c in candidates if c.discipline_code in hinted] or candidates
+
+    lines = _catalog_lines(scoped)
+    return [
+        "\n".join(lines[i : i + _DOC_CATALOG_CHUNK])
+        for i in range(0, len(lines), _DOC_CATALOG_CHUNK)
+    ]
+
+
+def select_document_title_keys_via_llm(
+    candidates: List[RaciCandidate],
+    document_exclusions: List[ScopeExclusion],
+    *,
+    model: Optional[str] = None,
+) -> Tuple[Set[str], List[dict]]:
+    """One LLM call per document-level exclusion, so each one gets the full catalog."""
+    if not candidates or not document_exclusions:
+        return set(), []
+
+    valid = {c.title_key for c in candidates}
+    selected: Set[str] = set()
+    audit_rows: List[dict] = []
+
+    jobs: List[Tuple[ScopeExclusion, str]] = []
+    for excl in document_exclusions:
+        for chunk in _catalog_chunks_for_exclusion(candidates, excl):
+            jobs.append((excl, chunk))
+
+    def _run_job(job: Tuple[ScopeExclusion, str]) -> Tuple[ScopeExclusion, Dict[str, Any]]:
+        excl, catalog_block = job
+        prompt = build_document_exclusion_prompt(excl, catalog_block)
+        data = call_scope_llm_text(
+            prompt,
+            model=model,
+            pass_id="pass1",
+            stage="pass2d_document_exclusions",
+        )
+        return excl, data
+
+    if len(jobs) == 1:
+        results = [_run_job(jobs[0])]
+    else:
+        results = run_parallel(jobs, _run_job, max_workers=llm_parallel_workers())
+
+    for excl, data in results:
+        for item in data.get("excluded_documents") or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("title_key") or "").strip().lower()
+            if key not in valid:
+                audit_rows.append(
+                    {
+                        "title_key": key,
+                        "outcome": "invalid_title_key",
+                        "exclusion_label": excl.label,
+                        "raw": item,
+                    }
+                )
+                continue
+            selected.add(key)
+            audit_rows.append(
+                {
+                    "title_key": key,
+                    "outcome": "excluded",
+                    "exclusion_label": excl.label,
+                    "reason": item.get("reason") or "",
+                }
+            )
+    return selected, audit_rows
 
 
 def filter_candidates_by_exclusions(
     candidates: List[RaciCandidate],
     exclusions: List[ScopeExclusion],
-) -> Tuple[List[RaciCandidate], List[dict]]:
+    *,
+    model: Optional[str] = None,
+) -> Tuple[List[RaciCandidate], List[dict], List[dict]]:
+    """Drop docs covered by discipline/chapter/pair, then LLM-pick document TitleKeys."""
     active = [e for e in exclusions if e.should_exclude()]
-    if not active:
-        return candidates, []
+    drop_discs = {
+        d
+        for e in active
+        if e.exclude_level == "discipline"
+        for d in e.discipline_codes
+    }
+    drop_chapters = {
+        ch
+        for e in active
+        if e.exclude_level == "chapter"
+        for ch in e.chapter_names
+    }
+    drop_pairs = {
+        p
+        for e in active
+        if e.exclude_level == "pair"
+        for p in e.pairs
+    }
+    doc_exclusions = [e for e in active if e.exclude_level == "document"]
 
-    kept: List[RaciCandidate] = []
+    # Safety: also drop candidates that somehow survived pair filter.
+    pre_kept: List[RaciCandidate] = []
     dropped: List[dict] = []
     for cand in candidates:
-        matched: Optional[ScopeExclusion] = None
-        for excl in active:
-            if _pair_matches_exclusion(cand.discipline_code, cand.chapter_name, excl):
-                matched = excl
-                break
-            if _title_matches_exclusion(cand.title, cand.title_key, excl):
-                matched = excl
-                break
-        if matched is None:
-            kept.append(cand)
+        pair = (cand.discipline_code, cand.chapter_name)
+        if cand.discipline_code in drop_discs:
+            dropped.append(
+                {
+                    "title_key": cand.title_key,
+                    "title": cand.title,
+                    "discipline_code": cand.discipline_code,
+                    "chapter_name": cand.chapter_name,
+                    "reason": "excluded_discipline",
+                    "exclude_level": "discipline",
+                    "label": "",
+                }
+            )
             continue
-        dropped.append(
-            {
-                "title_key": cand.title_key,
-                "title": cand.title,
-                "discipline_code": cand.discipline_code,
-                "chapter_name": cand.chapter_name,
-                "reason": "excluded_sow_package",
-                "package": matched.package,
-                "package_key": matched.package_key,
-                "evidence_quote": matched.evidence_quote,
-            }
-        )
-    return kept, dropped
+        if cand.chapter_name in drop_chapters:
+            dropped.append(
+                {
+                    "title_key": cand.title_key,
+                    "title": cand.title,
+                    "discipline_code": cand.discipline_code,
+                    "chapter_name": cand.chapter_name,
+                    "reason": "excluded_chapter",
+                    "exclude_level": "chapter",
+                    "label": "",
+                }
+            )
+            continue
+        if pair in drop_pairs:
+            dropped.append(
+                {
+                    "title_key": cand.title_key,
+                    "title": cand.title,
+                    "discipline_code": cand.discipline_code,
+                    "chapter_name": cand.chapter_name,
+                    "reason": "excluded_pair",
+                    "exclude_level": "pair",
+                    "label": "",
+                }
+            )
+            continue
+        pre_kept.append(cand)
+
+    title_keys, llm_audit = select_document_title_keys_via_llm(
+        pre_kept, doc_exclusions, model=model
+    )
+    kept: List[RaciCandidate] = []
+    for cand in pre_kept:
+        if cand.title_key in title_keys:
+            row = next(
+                (
+                    r
+                    for r in llm_audit
+                    if r.get("title_key") == cand.title_key and r.get("outcome") == "excluded"
+                ),
+                {},
+            )
+            dropped.append(
+                {
+                    "title_key": cand.title_key,
+                    "title": cand.title,
+                    "discipline_code": cand.discipline_code,
+                    "chapter_name": cand.chapter_name,
+                    "reason": "excluded_document",
+                    "exclude_level": "document",
+                    "label": row.get("exclusion_label") or "",
+                    "llm_reason": row.get("reason") or "",
+                }
+            )
+            continue
+        kept.append(cand)
+    return kept, dropped, llm_audit
 
 
 def run_scope_exclusion_pass(
     pdf_paths: List[Path],
     normalized: List[NormalizedSignal],
     json_dir: Path,
+    vocab: RaciVocabulary,
     *,
     model: Optional[str] = None,
 ) -> Tuple[List[NormalizedSignal], List[ScopeExclusion], dict]:
-    """Always-on step: extract exclusions from SoW and filter normalized pairs."""
-    exclusions = extract_scope_exclusions_from_pdfs(pdf_paths, model=model)
+    """Always-on: LLM exclusions with level; apply discipline/chapter/pair filters."""
+    exclusions = extract_scope_exclusions_from_pdfs(pdf_paths, vocab, model=model)
     filtered, dropped_pairs = filter_normalized_by_exclusions(normalized, exclusions)
     active = [e for e in exclusions if e.should_exclude()]
+    by_level = {
+        level: sum(1 for e in active if e.exclude_level == level)
+        for level in EXCLUDE_LEVELS
+    }
     audit = {
         "enabled": True,
+        "mode": "llm_exclude_level_on_raci_entities",
         "exclusions_found": len(exclusions),
         "exclusions_active": len(active),
+        "by_level_active": by_level,
         "pairs_before": len(normalized),
         "pairs_after": len(filtered),
         "pairs_dropped": len(dropped_pairs),
         "exclusions": [e.to_dict() for e in exclusions],
         "dropped_pairs": dropped_pairs,
         "dropped_documents": [],
+        "document_llm_audit": [],
     }
     save_json(json_dir / "scope_exclusion_audit.json", audit)
     return filtered, exclusions, audit
@@ -374,12 +559,17 @@ def apply_document_exclusions(
     exclusions: List[ScopeExclusion],
     json_dir: Path,
     pair_audit: Optional[dict] = None,
+    *,
+    model: Optional[str] = None,
 ) -> Tuple[List[RaciCandidate], dict]:
-    filtered, dropped_docs = filter_candidates_by_exclusions(candidates, exclusions)
+    filtered, dropped_docs, llm_audit = filter_candidates_by_exclusions(
+        candidates, exclusions, model=model
+    )
     audit = dict(pair_audit or {})
     audit["candidates_before"] = len(candidates)
     audit["candidates_after"] = len(filtered)
     audit["documents_dropped"] = len(dropped_docs)
     audit["dropped_documents"] = dropped_docs
+    audit["document_llm_audit"] = llm_audit
     save_json(json_dir / "scope_exclusion_audit.json", audit)
     return filtered, audit
