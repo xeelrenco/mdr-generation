@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -357,7 +358,11 @@ class ScopeStabilityTests(unittest.TestCase):
                 json_dir / "scope_only_summary.json",
                 {"candidate_count": 20},
             )
-            archive_json_run(json_dir, root, "P1", "20260101_100000")
+            stale = json_dir / "pipeline_summary.json"
+            save_json(stale, {"candidates_before_exclusions": 999})
+            os.utime(stale, (0, 0))
+            archived = archive_json_run(json_dir, root, "P1", "20260101_100000")
+            self.assertFalse((archived / "pipeline_summary.json").exists())
 
             comparison = compare_with_previous_run(
                 {"final_present_pairs": ["CIV|A", "ICT|C"]},

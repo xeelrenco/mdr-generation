@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
@@ -100,7 +101,7 @@ def compare_with_previous_run(
     }
     if current_candidate_count is not None:
         previous_candidate_count: Optional[int] = None
-        for filename in ("pipeline_summary.json", "scope_only_summary.json"):
+        for filename in ("scope_only_summary.json", "pipeline_summary.json"):
             summary_path = previous_dir / "json" / filename
             if not summary_path.exists():
                 continue
@@ -129,11 +130,19 @@ def archive_json_run(
     project: str,
     timestamp: str,
 ) -> Path:
+    """Archive only the audits written by this run, so comparisons stay honest."""
     destination = output_dir / "runs" / f"{project}_{timestamp}" / "json"
     destination.mkdir(parents=True, exist_ok=True)
+    try:
+        started_at = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").timestamp()
+    except ValueError:
+        started_at = None
     for path in sorted(json_dir.iterdir(), key=lambda value: value.name.lower()):
-        if path.is_file() and path.suffix.lower() in {".json", ".jsonl", ".csv"}:
-            shutil.copy2(path, destination / path.name)
+        if not path.is_file() or path.suffix.lower() not in {".json", ".jsonl", ".csv"}:
+            continue
+        if started_at is not None and path.stat().st_mtime < started_at:
+            continue
+        shutil.copy2(path, destination / path.name)
     return destination
 
 
