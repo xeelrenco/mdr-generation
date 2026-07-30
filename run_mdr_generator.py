@@ -423,10 +423,12 @@ def main() -> int:
                     "catalog_sha256": gap_pass_audit.get("catalog_sha256", ""),
                     "disagreement_count": gap_pass_audit.get("disagreement_count", 0),
                     "fallback_count": gap_pass_audit.get("fallback_count", 0),
-                    "insufficient_support_count": gap_pass_audit.get(
-                        "insufficient_support_count", 0
+                    "strong_direct_count": gap_pass_audit.get("strong_direct_count", 0),
+                    "arbiter_resolved_count": gap_pass_audit.get(
+                        "arbiter_resolved_count", 0
                     ),
-                    "tiebreak_model": gap_pass_audit.get("tiebreak_model", ""),
+                    "judges": gap_pass_audit.get("tiebreak_judges") or [],
+                    "arbiter": gap_pass_audit.get("arbiter_model", ""),
                     "comparison": scope_run_comparison,
                     "llm_usage": usage.to_dict(),
                 },
@@ -667,8 +669,13 @@ def main() -> int:
         scope_pass2_disagreements=gap_pass_audit.get("disagreement_count", 0),
         scope_pass2_fallbacks=gap_pass_audit.get("fallback_count", 0),
         scope_pass2_tiebreak_model=gap_pass_audit.get("tiebreak_model", ""),
-        scope_pass2_insufficient_support=gap_pass_audit.get(
-            "insufficient_support_count", 0
+        scope_pass2_judges=" + ".join(gap_pass_audit.get("tiebreak_judges") or []),
+        scope_pass2_judges_disagree=gap_pass_audit.get("judges_disagree_count", 0),
+        scope_pass2_strong_direct=gap_pass_audit.get("strong_direct_count", 0),
+        scope_pass2_arbiter_model=gap_pass_audit.get("arbiter_model", ""),
+        scope_pass2_arbiter_present=gap_pass_audit.get("arbiter_present_count", 0),
+        scope_pass2_arbiter_no_verdict=gap_pass_audit.get(
+            "arbiter_no_verdict_count", 0
         ),
         scope_catalog_sha256=gap_pass_audit.get("catalog_sha256", ""),
         scope_stability_previous_run=scope_run_comparison.get("previous_run", ""),
@@ -722,6 +729,7 @@ def main() -> int:
         llm_usage=llm_usage,
         exclusion_audit=exclusion_audit,
         basis_gate_audit=basis_gate_audit,
+        consensus_audit=gap_pass_audit,
     )
     archived_json = archive_json_run(json_dir, output_dir, project, ts)
     print(f"Step 7: report qualità -> {report_path}")

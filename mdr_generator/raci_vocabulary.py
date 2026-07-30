@@ -524,6 +524,122 @@ Rules:
 """
 
 
+def _format_arbiter_verdict(label: str, verdict: Optional[Dict[str, Any]]) -> List[str]:
+    if not verdict:
+        return [f"  {label}: no verdict returned"]
+    if verdict.get("present") is None:
+        return [f"  {label}: no verdict returned"]
+    state = "IN SCOPE" if verdict.get("present") else "NOT IN SCOPE"
+    head = f"  {label}: {state}"
+    confidence = str(verdict.get("confidence") or "").strip()
+    pages = [str(page) for page in verdict.get("source_pages") or []]
+    extra = []
+    if confidence:
+        extra.append(f"confidence={confidence}")
+    if pages:
+        extra.append("pages " + ",".join(pages[:6]))
+    confirmations = verdict.get("confirmations")
+    if isinstance(confirmations, int) and confirmations > 1:
+        extra.append(f"claimed in {confirmations} separate excerpts")
+    if extra:
+        head += f" [{'; '.join(extra)}]"
+    rows = [head]
+    quote = str(verdict.get("evidence_quote") or "").strip()
+    if quote:
+        rows.append(f'      quote: "{quote[:220]}"')
+    reason = str(verdict.get("reason") or "").strip()
+    if reason:
+        rows.append(f"      argument: {reason[:400]}")
+    return rows
+
+
+def build_arbiter_prompt(
+    pair_context: List[Tuple[Tuple[str, str], Dict[str, Any]]],
+    total_pages: int,
+    pair_examples: Optional[Dict[Tuple[str, str], List[str]]] = None,
+) -> str:
+    """Deciding pass for pairs where the two independent judges disagreed.
+
+    The arbiter is the only stage that sees the other stages' arguments, so it can
+    weigh them against the complete SoW instead of voting blind a third time.
+    """
+    blocks: List[str] = []
+    for (disc, chap), context in sorted(pair_context, key=lambda item: item[0]):
+        examples = (pair_examples or {}).get((disc, chap)) or []
+        suffix = ""
+        if examples:
+            suffix = f" (chapter examples only: {'; '.join(examples[:2])[:140]})"
+        rows = [f"- {disc} | {chap}{suffix}"]
+        rows.extend(
+            _format_arbiter_verdict(
+                "Discovery pass (read the SoW in excerpts, different model)",
+                context.get("pass1"),
+            )
+        )
+        rows.extend(
+            _format_arbiter_verdict(
+                "Catalog verification pass (read the SoW in excerpts, YOUR earlier run)",
+                context.get("pass2"),
+            )
+        )
+        rows.extend(
+            _format_arbiter_verdict("Judge A (read the complete SoW)", context.get("judge_a"))
+        )
+        rows.extend(
+            _format_arbiter_verdict("Judge B (read the complete SoW)", context.get("judge_b"))
+        )
+        blocks.append("\n".join(rows))
+    pairs_block = "\n\n".join(blocks)
+    return f"""You are the deciding arbiter on official RACI discipline+chapter pairs for an
+EPC/engineering Scope of Work (SoW).
+
+Two judges read the COMPLETE SoW independently and disagreed on the pairs below, or one of
+them failed to answer. You read the COMPLETE SoW too ({total_pages} pages, attached in full)
+and you see every earlier verdict with its argument. Your decision is final.
+
+CONTESTED PAIRS AND EARLIER VERDICTS:
+{pairs_block}
+
+Return EXACTLY one decision for every contested pair, in the same discipline/chapter spelling.
+present=true only when the SoW puts engineering documentation or deliverables of that pair
+inside the Contractor's scope of work. A system, equipment item, work category, test or
+required engineering activity in scope is sufficient support; do not require the exact
+chapter wording.
+
+present=false, even when the chapter subject appears in the text, whenever the text only:
+- denies or excludes the work ("non sono previsti lavori", "nessun intervento",
+  "escluso dalla fornitura", "a carico del Committente/Cliente");
+- names existing plant or equipment that receives no work in this project;
+- mentions an interface, signal exchange or communication protocol towards a
+  third-party or existing system, instead of designing that system;
+- describes a different system or activity that merely resembles the chapter name.
+
+How to arbitrate:
+- Verify every quoted argument against the attached SoW before trusting it. A quote that is
+  negated, conditional or about existing plant does not support the pair.
+- The two chunked passes saw only excerpts, so they could not see a negation or a Client
+  responsibility stated elsewhere. The verification pass is your own earlier output: judge it
+  as critically as the others and do not confirm it out of consistency.
+- Count arguments, not votes: a single well-quoted obligation outweighs several generic
+  claims, and an argument that misreads the SoW carries no weight.
+- Decide every contested pair; never omit one and never invent support that you cannot quote.
+
+For every decision:
+- discipline_code: exact contested code
+- chapter_name: exact contested chapter
+- present: true | false
+- confidence: "strong" | "medium" | "weak"
+- source_pages: GLOBAL 1-based pages within 1-{total_pages}; required when present=true
+- evidence_quote: short verbatim quote from the SoW; required when present=true
+- reason: short explanation naming the earlier argument you accepted or rejected
+
+JSON only:
+{{"decisions": [{{"discipline_code": "...", "chapter_name": "...",
+"present": true, "confidence": "strong", "source_pages": [1],
+"evidence_quote": "...", "reason": "..."}}]}}
+"""
+
+
 def build_scope_pdf_chunk_repass_prompt(
     vocab: RaciVocabulary,
     page_start: int,

@@ -52,6 +52,15 @@ CATEGORY_IT = {
 }
 
 
+_CONSENSUS_RULE_IT = {
+    "pass2_strong_direct": "Evidenza strong pass 2",
+    "judges_agree": "Giudici concordi",
+    "arbiter_decided": "Arbitro",
+    "arbiter_no_verdict": "Arbitro senza verdetto",
+    "fail_open_incomplete": "Fail-open (risposta incompleta)",
+}
+
+
 def _write_table(
     ws,
     start_row: int,
@@ -176,6 +185,7 @@ def write_qa_report(
     llm_usage: Optional[LlmUsageSummary] = None,
     exclusion_audit: Optional[dict] = None,
     basis_gate_audit: Optional[dict] = None,
+    consensus_audit: Optional[dict] = None,
 ) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
@@ -271,30 +281,50 @@ def write_qa_report(
         [
             "Coppie finali dopo consenso",
             summary.scope_pass2_pairs_final if summary.scope_pass2_enabled else "—",
-            "Accordo pass 1/pass 2 oppure decisione tie-break",
+            "Accordo pass 1/pass 2, evidenza strong, giudici o arbitro",
         ],
         [
-            "Modello tie-break",
+            "Giudici sulle coppie contese",
             (
-                summary.scope_pass2_tiebreak_model or "—"
+                summary.scope_pass2_judges or "—"
                 if summary.scope_pass2_enabled
                 else "—"
             ),
-            "Terzo voto su PDF completo, modello diverso dal pass 2",
+            "Voto cieco sul PDF completo: se concordano la decisione è loro",
         ],
         [
-            "Disaccordi inviati al tie-break",
+            "Coppie contese",
             summary.scope_pass2_disagreements if summary.scope_pass2_enabled else "—",
-            "Comprende risposte pass 2 incomplete/unknown",
+            "Disaccordo pass 1/pass 2 o risposte pass 2 incomplete",
         ],
         [
-            "Coppie scartate per supporto insufficiente",
+            "Arbitro sui disaccordi tra giudici",
             (
-                summary.scope_pass2_insufficient_support
+                f"{summary.scope_pass2_arbiter_model or '—'} — "
+                f"{summary.scope_pass2_judges_disagree} coppie, "
+                f"{summary.scope_pass2_arbiter_present} ammesse"
                 if summary.scope_pass2_enabled
                 else "—"
             ),
-            "Non trovate dal pass 1 e sostenute da un solo chunk non strong",
+            "Legge PDF completo e argomenti dei due giudici, poi decide",
+        ],
+        [
+            "Ammesse da evidenza strong",
+            (
+                summary.scope_pass2_strong_direct
+                if summary.scope_pass2_enabled
+                else "—"
+            ),
+            "Non trovate dal pass 1 ma con evidenza strong: entrano senza giudici",
+        ],
+        [
+            "Coppie senza verdetto dell'arbitro",
+            (
+                summary.scope_pass2_arbiter_no_verdict
+                if summary.scope_pass2_enabled
+                else "—"
+            ),
+            "Arbitro non ha risposto: restano solo se trovate dal pass 1",
         ],
         [
             "Fail-open per risposta incompleta",
@@ -595,6 +625,56 @@ def write_qa_report(
         ["Sezione SoW", "Disciplina LLM", "Capitolo LLM", "Motivo", "Recovery LLM", "PDF"],
         excl_rows,
         [24, 12, 28, 36, 14, 28],
+    )
+
+    # --- Foglio 2b: Scope_consenso (Step 2c) ---
+    ws = wb.create_sheet("Scope_consenso")
+    row = _write_section_title(
+        ws, 1, "Coppie non decise dall'accordo pass 1 / pass 2 (Step 2c)"
+    )
+    decisions = [
+        item
+        for item in ((consensus_audit or {}).get("pair_decisions") or [])
+        if item.get("resolution") != "agreement"
+    ]
+    consensus_rows = [
+        [
+            item.get("discipline_code", ""),
+            item.get("chapter_name", ""),
+            _CONSENSUS_RULE_IT.get(
+                item.get("resolution", ""), item.get("resolution", "")
+            ),
+            "Presente" if item.get("final_decision") == "present" else "Esclusa",
+            item.get("pass1_vote", ""),
+            item.get("pass2_vote", ""),
+            item.get("pass2_support_chunks", ""),
+            "Sì" if item.get("pass2_has_strong") else "No",
+            item.get("judge1_vote", ""),
+            item.get("judge2_vote", ""),
+            item.get("arbiter_vote", ""),
+            (item.get("arbiter_reason") or item.get("judge1_reason") or "")[:300],
+        ]
+        for item in decisions
+    ] or [["—"] * 12]
+    _write_table(
+        ws,
+        row,
+        [
+            "Disciplina",
+            "Capitolo",
+            "Chi ha deciso",
+            "Esito",
+            "Pass 1",
+            "Pass 2",
+            "Conferme pass 2",
+            "Evidenza strong",
+            "Giudice 1",
+            "Giudice 2",
+            "Arbitro",
+            "Motivazione",
+        ],
+        consensus_rows,
+        [10, 26, 22, 10, 10, 10, 12, 12, 12, 12, 12, 46],
     )
 
     # --- Foglio 3b: Esclusioni_SoW (Step 2d) ---

@@ -414,7 +414,9 @@ def _call_claude_pdf(
         "messages": [{"role": "user", "content": content}],
     }
     if _claude_supports_custom_temperature(model):
-        create_kwargs["temperature"] = 0.1
+        create_kwargs["temperature"] = (
+            0.0 if stage.startswith("pass2_catalog_") else 0.1
+        )
     max_retries = 5
     base_wait = 60
     message = None
