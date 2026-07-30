@@ -102,7 +102,7 @@ def _run_job(
             f"{hashlib.sha256(job.pdf_label.encode('utf-8')).hexdigest()[:8]}_"
             f"gate_{job.discipline_code}_{job.part}.pdf"
         ),
-        stage="pass3e_sow_basis_gate",
+        stage="pass7_sow_basis_gate",
     )
     return job, data
 

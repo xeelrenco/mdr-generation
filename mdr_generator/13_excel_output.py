@@ -5,17 +5,15 @@ from __future__ import annotations
 from copy import copy
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.filters import FilterColumn
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .models import MdrLineItem, SelectedDocument
+from .models import MdrLineItem
 from .utils import safe_excel_value
-
-LineItemLike = Union[MdrLineItem, SelectedDocument]
 
 DATA_START_ROW = 14
 HEADER_LAST_ROW = 13
@@ -102,29 +100,27 @@ def _reneco_code_formula(row: int, project_prefix: str) -> str:
     return f'="{prefix}-"&H{row}&"-"&I{row}&J{row}&"-"&K{row}'
 
 
-def _line_title(doc: LineItemLike) -> str:
-    if isinstance(doc, MdrLineItem):
-        return doc.mdr_document_title
-    return doc.title
+def _line_title(doc: MdrLineItem) -> str:
+    return doc.mdr_document_title
 
 
-def _line_discipline(doc: LineItemLike) -> str:
+def _line_discipline(doc: MdrLineItem) -> str:
     return doc.discipline_code
 
 
-def _line_type(doc: LineItemLike) -> str:
+def _line_type(doc: MdrLineItem) -> str:
     return doc.type_code or ""
 
 
-def _line_category(doc: LineItemLike) -> str:
+def _line_category(doc: MdrLineItem) -> str:
     return doc.category_code or ""
 
 
-def _line_wbs(doc: LineItemLike) -> str:
+def _line_wbs(doc: MdrLineItem) -> str:
     return doc.discipline_wbs or ""
 
 
-def _line_workflow(doc: LineItemLike) -> str:
+def _line_workflow(doc: MdrLineItem) -> str:
     return doc.category_workflow or ""
 
 
@@ -222,7 +218,7 @@ def _write_schedule_debug_row(ws: Worksheet, row: int, doc: MdrLineItem) -> None
 def write_mdr_excel(
     template_path: Path,
     output_path: Path,
-    documents: List[LineItemLike],
+    documents: List[MdrLineItem],
     project_code: Optional[str] = None,
     discipline_short_codes: Optional[Dict[str, str]] = None,
     *,
@@ -269,12 +265,11 @@ def write_mdr_excel(
         ws.cell(row=row, column=COL_WBS, value=safe_excel_value(_line_wbs(doc)))
         ws.cell(row=row, column=COL_WORKFLOW, value=safe_excel_value(_line_workflow(doc)))
         ws.cell(row=row, column=COL_FORMULA, value=_reneco_code_formula(row, proj))
-        if isinstance(doc, MdrLineItem):
-            if doc.manhours is not None and doc.manhours >= 0:
-                ws.cell(row=row, column=COL_MANHOURS, value=doc.manhours)
-            _write_date_cell(ws, row, COL_PLANNED_FIRST_ISSUE, doc.planned_start)
-            if schedule_debug_columns:
-                _write_schedule_debug_row(ws, row, doc)
+        if doc.manhours is not None and doc.manhours >= 0:
+            ws.cell(row=row, column=COL_MANHOURS, value=doc.manhours)
+        _write_date_cell(ws, row, COL_PLANNED_FIRST_ISSUE, doc.planned_start)
+        if schedule_debug_columns:
+            _write_schedule_debug_row(ws, row, doc)
 
     last_data_row = DATA_START_ROW + len(documents) - 1 if documents else FILTER_HEADER_ROW
     filter_last = (

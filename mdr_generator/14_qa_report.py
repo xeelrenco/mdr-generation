@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -16,7 +16,6 @@ from .models import (
     PipelineSummary,
     RencoComparison,
     RawScopeSignal,
-    SelectedDocument,
     UncertainMapping,
 )
 from .llm_usage import (
@@ -26,8 +25,6 @@ from .llm_usage import (
     provider_billing_label,
 )
 from .utils import format_elapsed_seconds, safe_excel_value
-
-GeneratedDoc = Union[MdrLineItem, SelectedDocument]
 
 HEADER_FILL = PatternFill("solid", fgColor="2F5496")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -103,7 +100,7 @@ def _reason_it(reason: str) -> str:
 def _build_gap_analysis_rows(
     renco: RencoComparison,
     normalized: List[NormalizedSignal],
-    selected: List[GeneratedDoc],
+    selected: List[MdrLineItem],
 ) -> tuple[List[List[Any]], List[List[Any]]]:
     """Righe dettaglio gap + riepilogo per disciplina."""
     scope_pairs = {(n.discipline_code, n.chapter_name or "") for n in normalized}
@@ -178,7 +175,7 @@ def write_qa_report(
     raw_signals: List[RawScopeSignal],
     normalized: List[NormalizedSignal],
     uncertain: List[UncertainMapping],
-    selected: List[GeneratedDoc],
+    selected: List[MdrLineItem],
     summary: PipelineSummary,
     renco: Optional[RencoComparison] = None,
     llm_usage: Optional[LlmUsageSummary] = None,
@@ -891,45 +888,26 @@ def write_qa_report(
     ws = wb.create_sheet("MDR_generato")
     mdr_rows = []
     for s in selected:
-        if isinstance(s, MdrLineItem):
-            mdr_rows.append(
-                [
-                    s.discipline_code,
-                    s.chapter_name,
-                    s.mdr_document_title,
-                    s.raci_title,
-                    s.sow_specific_title,
-                    s.sow_title_confidence,
-                    s.raci_title_key,
-                    s.instance_count,
-                    "Sì" if s.scalable else "No",
-                    s.duration_days if s.duration_days is not None else "",
-                    s.manhours if s.manhours is not None else "",
-                    s.planned_start.isoformat() if s.planned_start else "",
-                    s.historical_count,
-                    "Sì" if s.bucket == "with_history" else "No",
-                    s.category_code,
-                    s.type_code,
-                ]
-            )
-        else:
-            mdr_rows.append(
-                [
-                    s.discipline_code,
-                    s.chapter_name,
-                    s.title,
-                    s.title,
-                    s.title_key,
-                    1,
-                    "—",
-                    "",
-                    "",
-                    s.historical_count,
-                    "Sì" if s.bucket == "with_history" else "No",
-                    s.category_code,
-                    s.type_code,
-                ]
-            )
+        mdr_rows.append(
+            [
+                s.discipline_code,
+                s.chapter_name,
+                s.mdr_document_title,
+                s.raci_title,
+                s.sow_specific_title,
+                s.sow_title_confidence,
+                s.raci_title_key,
+                s.instance_count,
+                "Sì" if s.scalable else "No",
+                s.duration_days if s.duration_days is not None else "",
+                s.manhours if s.manhours is not None else "",
+                s.planned_start.isoformat() if s.planned_start else "",
+                s.historical_count,
+                "Sì" if s.bucket == "with_history" else "No",
+                s.category_code,
+                s.type_code,
+            ]
+        )
     _write_table(
         ws,
         1,

@@ -243,7 +243,7 @@ def _run_enrichment_llm_for_pair(
             max_elements=max_elements,
         )
         data = call_scope_llm_text(
-            prompt, model=model, pass_id="pass1", stage="pass3d_title_enrichment"
+            prompt, model=model, pass_id="pass1", stage="pass10_title_enrichment"
         )
         decisions, rows = _parse_enrichment_response(
             data,
@@ -278,7 +278,7 @@ def _run_enrichment_llm_for_pair(
             part_total=part_total,
         )
         data = call_scope_llm_text(
-            prompt, model=model, pass_id="pass1", stage="pass3d_title_enrichment"
+            prompt, model=model, pass_id="pass1", stage="pass10_title_enrichment"
         )
         _, rows = _parse_enrichment_response(
             data,

@@ -504,7 +504,7 @@ def _run_exclusion_chunk(
             f"{hashlib.sha256(source_label.encode('utf-8')).hexdigest()[:8]}_"
             f"excl_{job.page_start}_{job.page_end}.pdf"
         ),
-        stage="pass2d_scope_exclusions",
+        stage="pass4_scope_exclusions",
     )
     return job, _parse_exclusions(data, source_pdf=source_label, vocab=vocab)
 
@@ -577,7 +577,7 @@ def extract_scope_exclusions_from_pdfs(
                         f"{hashlib.sha256(labels[pdf_path].encode('utf-8')).hexdigest()[:8]}_"
                         "exclusions.pdf"
                     ),
-                    stage="pass2d_scope_exclusions",
+                    stage="pass4_scope_exclusions",
                 )
             except Exception as error:
                 if not is_transient_llm_error(error):
@@ -732,7 +732,7 @@ def select_document_title_keys_via_llm(
                     f"{pdf_path.stem}_doc_excl_"
                     f"{abs(hash((excl.label, catalog_block))) % 10_000_000}.pdf"
                 ),
-                stage="pass2d_document_exclusions",
+                stage="pass4_document_exclusions",
             )
         except Exception as error:
             if not is_transient_llm_error(error):

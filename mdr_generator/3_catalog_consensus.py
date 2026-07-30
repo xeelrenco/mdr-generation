@@ -161,10 +161,10 @@ class _VerificationResult:
 
 def _llm_stage(job: _VerificationJob) -> str:
     if job.arbiter:
-        return "pass2_catalog_arbiter"
+        return "pass3_catalog_arbiter"
     if job.tie_break:
-        return "pass2_catalog_tiebreak"
-    return "pass2_catalog_verification"
+        return "pass3_catalog_tiebreak"
+    return "pass3_catalog_verification"
 
 
 def _extraction_method(job: _VerificationJob) -> str:

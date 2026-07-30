@@ -321,7 +321,7 @@ def _run_scalable_llm_for_pair(
             context_chunks[0],
             historical_examples=hist_map,
         )
-        data = call_scope_llm_text(prompt, model=model, pass_id="pass1", stage="pass3b_scalable")
+        data = call_scope_llm_text(prompt, model=model, pass_id="pass1", stage="pass9_scalable")
         decisions, rows = _parse_scalable_instance_decisions(
             data,
             scalable,
@@ -352,7 +352,7 @@ def _run_scalable_llm_for_pair(
             part_index=idx,
             part_total=part_total,
         )
-        data = call_scope_llm_text(prompt, model=model, pass_id="pass1", stage="pass3b_scalable")
+        data = call_scope_llm_text(prompt, model=model, pass_id="pass1", stage="pass9_scalable")
         partial, rows = _parse_scalable_instance_decisions(
             data,
             scalable,

@@ -379,7 +379,7 @@ def _call_openai_pdf(
     }
     if _openai_supports_custom_temperature(model):
         create_kwargs["temperature"] = (
-            0.0 if stage.startswith("pass2_catalog_") else 0.1
+            0.0 if stage.startswith("pass3_catalog_") else 0.1
         )
     response = client.chat.completions.create(**create_kwargs)
     _record_openai_usage(response, model, stage, "pdf")
@@ -418,7 +418,7 @@ def _call_gemini_pdf(
             ],
         ),
         config=types.GenerateContentConfig(
-            temperature=0.0 if stage.startswith("pass2_catalog_") else 0.1,
+            temperature=0.0 if stage.startswith("pass3_catalog_") else 0.1,
             response_mime_type="application/json",
         ),
     )
@@ -486,7 +486,7 @@ def _call_claude_pdf(
     }
     if _claude_supports_custom_temperature(model):
         create_kwargs["temperature"] = (
-            0.0 if stage.startswith("pass2_catalog_") else 0.1
+            0.0 if stage.startswith("pass3_catalog_") else 0.1
         )
     max_retries = 5
     base_wait = 60
@@ -561,7 +561,7 @@ def _invoke_llm_pdf(
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
 def _call_openai_text(
-    prompt: str, model: str, api_key: str, *, stage: str = "pass3b_scalable"
+    prompt: str, model: str, api_key: str, *, stage: str = "pass9_scalable"
 ) -> Dict[str, Any]:
     from openai import OpenAI
 
@@ -580,7 +580,7 @@ def _call_openai_text(
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
 def _call_gemini_text(
-    prompt: str, model: str, *, stage: str = "pass3b_scalable"
+    prompt: str, model: str, *, stage: str = "pass9_scalable"
 ) -> Dict[str, Any]:
     from google import genai
     from google.genai import types
@@ -610,7 +610,7 @@ def _call_gemini_text(
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
 def _call_claude_text(
-    prompt: str, model: str, api_key: str, *, stage: str = "pass3b_scalable"
+    prompt: str, model: str, api_key: str, *, stage: str = "pass9_scalable"
 ) -> Dict[str, Any]:
     import anthropic
 
@@ -639,7 +639,7 @@ def _invoke_llm_text(
     provider: str,
     model: Optional[str] = None,
     *,
-    stage: str = "pass3b_scalable",
+    stage: str = "pass9_scalable",
 ) -> Dict[str, Any]:
     provider = (provider or "openai").lower()
     if provider == "gemini":
@@ -1149,9 +1149,13 @@ def _resolve_llm_stage(pass_id: str, stage: Optional[str] = None) -> str:
         return stage
     return {
         "pass1": "pass1_scope",
-        "pass2": "pass2_gap",
-        "pass3b": "pass3b_scalable",
-        "pass2d": "pass2d_scope_exclusions",
+        "pass2": "pass3_catalog_verification",
+        "pass3": "pass3_catalog_verification",
+        "pass4": "pass4_scope_exclusions",
+        "pass9": "pass9_scalable",
+        # legacy aliases (pre-renumber)
+        "pass3b": "pass9_scalable",
+        "pass2d": "pass4_scope_exclusions",
     }.get((pass_id or "pass1").lower(), "pass1_scope")
 
 

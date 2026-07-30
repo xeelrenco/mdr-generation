@@ -166,25 +166,6 @@ class MdrLineItem:
 
 
 @dataclass
-class SelectedDocument:
-    title_key: str
-    title: str
-    discipline_code: str
-    chapter_name: str
-    type_code: str
-    category_code: str
-    discipline_wbs: str
-    category_workflow: str
-    historical_count: int
-    avg_confidence: Optional[float]
-    selection_reason: str
-    bucket: str  # with_history | without_history
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
 class PipelineSummary:
     project_name: str
     scope_pdfs: List[str]

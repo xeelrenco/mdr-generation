@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Set, Tuple, Union
+from typing import Dict, List, Set, Tuple
 
 import duckdb
 
@@ -13,28 +13,16 @@ from .models import (
     RencoComparison,
     RencoComparisonRow,
     ScopePairSummary,
-    SelectedDocument,
 )
 
-GeneratedDoc = Union[MdrLineItem, SelectedDocument]
+
+def _doc_title_key(doc: MdrLineItem) -> str:
+    return doc.raci_title_key
 
 
-def _doc_title_key(doc: GeneratedDoc) -> str:
-    if isinstance(doc, MdrLineItem):
-        return doc.raci_title_key
-    return doc.title_key
+def _doc_raci_title(doc: MdrLineItem) -> str:
+    return doc.raci_title
 
-
-def _doc_raci_title(doc: GeneratedDoc) -> str:
-    if isinstance(doc, MdrLineItem):
-        return doc.raci_title
-    return doc.title
-
-
-def _doc_mdr_title(doc: GeneratedDoc) -> str:
-    if isinstance(doc, MdrLineItem):
-        return doc.mdr_document_title
-    return doc.title
 
 PLACEHOLDER_TITLES = (
     "ID Created to fulfill bank spaces",
@@ -106,7 +94,7 @@ def build_renco_comparison(
     conn: duckdb.DuckDBPyConnection,
     project_code: str,
     normalized: List[NormalizedSignal],
-    selected: List[GeneratedDoc],
+    selected: List[MdrLineItem],
 ) -> RencoComparison:
     renco_titles = load_project_titles(conn, project_code)
     source_label = f"storico MotherDuck (progetto {project_code})"
@@ -133,7 +121,7 @@ def build_renco_comparison(
         elif decision == "NO_MATCH":
             no_match_rows += 1
 
-    generated_by_key: Dict[str, GeneratedDoc] = {}
+    generated_by_key: Dict[str, MdrLineItem] = {}
     for s in selected:
         key = _doc_title_key(s)
         if key and key not in generated_by_key:
@@ -147,7 +135,6 @@ def build_renco_comparison(
     detail: List[RencoComparisonRow] = []
     for key in sorted(overlap):
         doc = generated_by_key[key]
-        hist = doc.historical_count if isinstance(doc, MdrLineItem) else doc.historical_count
         detail.append(
             RencoComparisonRow(
                 category="overlap",
@@ -155,7 +142,7 @@ def build_renco_comparison(
                 raci_title=_doc_raci_title(doc),
                 discipline_code=doc.discipline_code,
                 chapter_name=doc.chapter_name,
-                historical_count=hist,
+                historical_count=doc.historical_count,
             )
         )
     for key in sorted(only_generated):
