@@ -1,4 +1,4 @@
-"""Step 3: Generate RACI candidate set from v_DocumentsEnriched."""
+"""Step 6: Generate RACI candidate set from v_DocumentsEnriched."""
 
 from __future__ import annotations
 

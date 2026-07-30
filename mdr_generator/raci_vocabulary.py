@@ -75,7 +75,7 @@ _MDR_SUFFIX_LANGUAGE_RULES = """LANGUAGE (MDR title suffix fields: label, sow_sp
 
 
 def build_scope_exclusion_prompt(vocab: RaciVocabulary) -> str:
-    """Prompt for step 2d: LLM chooses exclusion level against RACI catalog entities."""
+    """Prompt for step 4: LLM chooses exclusion level against RACI catalog entities."""
     return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
 Your task: find work areas OUT OF CONTRACTOR DOCUMENTATION SCOPE because they are:
@@ -621,7 +621,7 @@ def build_scalable_instance_prompt(
     part_index: Optional[int] = None,
     part_total: Optional[int] = None,
 ) -> str:
-    """Prompt for 3b: instance counts for Scalable RACI documents only."""
+    """Prompt for step 9: instance counts for Scalable RACI documents only."""
     lines: List[str] = []
     for c in candidates:
         examples = (historical_examples or {}).get(c.title_key) or []
@@ -719,10 +719,10 @@ def build_title_enrichment_prompt(
     part_index: Optional[int] = None,
     part_total: Optional[int] = None,
 ) -> str:
-    """Prompt for Step 3d: SoW-specific titles and row split elements."""
+    """Prompt for Step 10: SoW-specific titles and row split elements."""
     lines: List[str] = []
     for dec in decisions:
-        hint = f" (3b instances={dec.instance_count})" if getattr(dec, "instance_count", 1) > 1 else ""
+        hint = f" (9 instances={dec.instance_count})" if getattr(dec, "instance_count", 1) > 1 else ""
         lines.append(f"- {dec.title_key} | {dec.raci_title}{hint}")
 
     catalog_block = "\n".join(lines)

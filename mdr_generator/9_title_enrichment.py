@@ -1,4 +1,4 @@
-"""Step 3d: SoW-specific titles and v2 row split via sow_elements[]."""
+"""Step 10: SoW-specific titles and v2 row split via sow_elements[]."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def _apply_elements_to_decision(
             instance_count=1,
             instances=[inst],
             qa_flags=qa_flags,
-            selection_reason=f"{dec.selection_reason}; 3d: 1 SoW element",
+            selection_reason=f"{dec.selection_reason}; 10: 1 SoW element",
         )
         audit["outcome"] = "single_element"
         audit["count_after"] = 1
@@ -165,14 +165,14 @@ def _apply_elements_to_decision(
     if new_count > count_before:
         qa_flags.append("sow_split_expanded")
     elif new_count < count_before:
-        qa_flags.append("sow_split_reduced_vs_3b")
+        qa_flags.append("sow_split_reduced_vs_9")
 
     updated = replace(
         dec,
         instance_count=new_count,
         instances=instances,
         qa_flags=qa_flags,
-        selection_reason=f"{dec.selection_reason}; 3d: {new_count} SoW elements",
+        selection_reason=f"{dec.selection_reason}; 10: {new_count} SoW elements",
     )
     audit["outcome"] = "multi_element_split"
     audit["count_after"] = new_count
@@ -470,7 +470,7 @@ def run_title_enrichment_pass(
             jobs,
             _job_fn,
             max_workers=workers,
-            label="3d Title enrichment",
+            label="10 Title enrichment",
             describe=_desc,
             result_note=_note,
         )

@@ -1,4 +1,4 @@
-"""Step 2d: SoW exclusions — LLM chooses level on RACI entities.
+"""Step 4: SoW exclusions — LLM chooses level on RACI entities.
 
 Levels (narrowest first):
 - document: TitleKeys (second LLM pass)

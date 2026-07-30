@@ -1,4 +1,4 @@
-"""Step 7: Report qualità generazione MDR (leggibile, in italiano)."""
+"""Step 15: Report qualità generazione MDR (leggibile, in italiano)."""
 
 from __future__ import annotations
 
@@ -158,7 +158,7 @@ def _build_gap_analysis_rows(
         [
             "Coppie gap estratte ma con 0 documenti",
             pairs_scope_no_output,
-            "Tutti i candidati rimossi da 2d/3e",
+            "Tutti i candidati rimossi da Step 4/7",
         ],
         [
             "Coppie gap ancora fuori scope",
@@ -221,8 +221,8 @@ def write_qa_report(
         (
             "Esclusioni_SoW",
             "",
-            "Ambiti committente/fuori scope (Step 2d), pair/documenti rimossi e "
-            "documenti senza base nello SoW (Step 3e).",
+            "Ambiti committente/fuori scope (Step 4), pair/documenti rimossi e "
+            "documenti senza base nello SoW (Step 7).",
         ),
         (
             "MDR_generato",
@@ -349,10 +349,10 @@ def write_qa_report(
         [
             "2. Coppie scope valide",
             summary.normalized_signal_count,
-            "Disciplina+capitolo presenti in catalogo (dopo Step 2d)",
+            "Disciplina+capitolo presenti in catalogo (dopo Step 4)",
         ],
         [
-            "2d. Ambiti esclusi SoW",
+            "4. Ambiti esclusi SoW",
             summary.scope_exclusions_active,
             "Committente / fuori scope con evidence",
         ],
@@ -370,21 +370,21 @@ def write_qa_report(
             "   — documenti segnalati, non applicati",
             summary.scope_docs_flagged,
             (
-                "Circuit breaker 2d scattato"
+                "Circuit breaker Step 4 scattato"
                 if summary.scope_exclusion_guard_triggered
                 else "—"
             ),
         ],
         [
-            "3e. Doc senza base nello SoW",
+            "7. Doc senza base nello SoW",
             summary.sow_basis_docs_dropped,
             "Temi non previsti dal progetto (gate generalista)",
         ],
         [
-            "   — 3e segnalati, non applicati",
+            "   — 7 segnalati, non applicati",
             summary.sow_basis_docs_flagged,
             (
-                "Circuit breaker 3e scattato"
+                "Circuit breaker Step 7 scattato"
                 if summary.sow_basis_guard_triggered
                 else "—"
             ),
@@ -392,21 +392,21 @@ def write_qa_report(
         [
             "3. Candidati prima delle esclusioni",
             summary.candidates_before_exclusions,
-            "Catalogo dalle coppie scope prima di 2d/3e",
+            "Catalogo dalle coppie scope prima di 4/7",
         ],
         [
-            "3. Candidati dopo 2d",
+            "6. Candidati dopo Step 4",
             summary.candidates_after_2d,
             "Dopo i quattro livelli di esclusione",
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
         [
-            "3b. Decisioni document scope",
+            "9. Decisioni document scope",
             summary.document_scope_decisions,
             "Pass LLM per coppia (in scope / istanze)",
         ],
         [
-            "3d. Title enrichment (SoW)",
+            "10. Title enrichment (SoW)",
             "Sì" if summary.title_enrichment_enabled else "No",
             "Titoli SoW-specifici + split righe v2 (sow_elements)",
         ],
@@ -418,13 +418,13 @@ def write_qa_report(
         [
             "   — righe extra da split",
             summary.title_enrichment_extra_rows if summary.title_enrichment_enabled else "—",
-            "Righe MDR oltre il conteggio post-3b",
+            "Righe MDR oltre il conteggio post-9",
         ],
         ["4. Righe MDR finali", summary.mdr_line_items or summary.selected_count, "Output Excel MDR"],
         [
             "   — durata timeline popolata",
             summary.duration_populated_count,
-            "Giorni calendario (Finish−Start) da v_TimelineTaskToMdrLinks_Dates; usata per Step 5 schedule",
+            "Giorni calendario (Finish−Start) da v_TimelineTaskToMdrLinks_Dates; usata per Step 12 schedule",
         ],
         [
             "   — MANHOURS popolati",
@@ -625,10 +625,10 @@ def write_qa_report(
         [24, 12, 28, 36, 28],
     )
 
-    # --- Foglio 2b: Scope_consenso (Step 2c) ---
+    # --- Foglio 2b: Scope_consenso (Step 3) ---
     ws = wb.create_sheet("Scope_consenso")
     row = _write_section_title(
-        ws, 1, "Coppie non decise dall'accordo pass 1 / pass 2 (Step 2c)"
+        ws, 1, "Coppie non decise dall'accordo pass 1 / pass 2 (Step 3)"
     )
     decisions = [
         item
@@ -671,10 +671,10 @@ def write_qa_report(
         [10, 26, 22, 10, 10, 10, 12, 12, 12, 46],
     )
 
-    # --- Foglio 3b: Esclusioni_SoW (Step 2d) ---
+    # --- Foglio 3b: Esclusioni_SoW (Step 4) ---
     ws = wb.create_sheet("Esclusioni_SoW")
     excl_audit = exclusion_audit or {}
-    row = _write_section_title(ws, 1, "Ambiti esclusi dallo SoW (Step 2d)")
+    row = _write_section_title(ws, 1, "Ambiti esclusi dallo SoW (Step 4)")
     excl_items = excl_audit.get("exclusions") or []
     if excl_items:
         package_rows = [
@@ -794,7 +794,7 @@ def write_qa_report(
     if excl_audit.get("drop_guard_triggered"):
         row += 1
         row = _write_section_title(
-            ws, row, "2d segnalati ma non applicati (circuit breaker)"
+            ws, row, "Step 4 segnalati ma non applicati (circuit breaker)"
         )
         flagged_docs = excl_audit.get("flagged_documents") or []
         flagged_rows = [
@@ -842,7 +842,7 @@ def write_qa_report(
 
     row += 1
     row = _write_section_title(
-        ws, row, "Documenti senza base nello SoW (Step 3e)"
+        ws, row, "Documenti senza base nello SoW (Step 7)"
     )
     gate_audit = basis_gate_audit or {}
     gate_docs = gate_audit.get("dropped_documents") or []

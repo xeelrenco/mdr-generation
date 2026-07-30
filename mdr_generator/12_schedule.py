@@ -1,4 +1,4 @@
-"""Step 5: Schedule planning — timeline duration, man-hours, dates, row order."""
+"""Step 12: Schedule planning — timeline duration, man-hours, dates, row order."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ from .utils import save_json
 
 _im = importlib.import_module
 load_timeline_duration_map = _im(
-    "mdr_generator.4_timeline_duration"
+    "mdr_generator.12_timeline_duration"
 ).load_timeline_duration_map
-apply_timeline_duration = _im("mdr_generator.4_timeline_duration").apply_timeline_duration
-apply_manhours_from_duration = _im("mdr_generator.4_manhours").apply_manhours_from_duration
-HOURS_PER_DURATION_DAY = _im("mdr_generator.4_manhours").HOURS_PER_DURATION_DAY
+apply_timeline_duration = _im("mdr_generator.12_timeline_duration").apply_timeline_duration
+apply_manhours_from_duration = _im("mdr_generator.12_manhours").apply_manhours_from_duration
+HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
 
 SCHEDULE_DISABLED_REASON = "schedule.enabled=false or --no-schedule"
 

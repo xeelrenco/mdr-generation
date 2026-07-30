@@ -1,22 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mdr_generator.gap_targeted_pass import (
-    _VerificationJob,
-    _VerificationResult,
-    _aggregate_votes,
-    _batch_catalog_pairs,
-    _has_strong_support,
-    _is_transient_quota_error,
-    _parse_verification_response,
-    _scan_catalog,
-    run_gap_targeted_pass,
-)
 from mdr_generator.models import NormalizedSignal, RawScopeSignal
 from mdr_generator.raci_vocabulary import RaciVocabulary, build_arbiter_prompt
 from mdr_generator.scope_run_history import (
@@ -24,6 +14,17 @@ from mdr_generator.scope_run_history import (
     compare_with_previous_run,
 )
 from mdr_generator.utils import save_json
+
+consensus = importlib.import_module("mdr_generator.3_catalog_consensus")
+_VerificationJob = consensus._VerificationJob
+_VerificationResult = consensus._VerificationResult
+_aggregate_votes = consensus._aggregate_votes
+_batch_catalog_pairs = consensus._batch_catalog_pairs
+_has_strong_support = consensus._has_strong_support
+_is_transient_quota_error = consensus._is_transient_quota_error
+_parse_verification_response = consensus._parse_verification_response
+_scan_catalog = consensus._scan_catalog
+run_gap_targeted_pass = consensus.run_gap_targeted_pass
 
 
 def _normalized(pair: tuple[str, str]) -> NormalizedSignal:
@@ -200,17 +201,15 @@ class ScopeStabilityTests(unittest.TestCase):
         except RuntimeError as wrapped:
             self.assertTrue(_is_transient_quota_error(wrapped))
 
-    @patch(
-        "mdr_generator.gap_targeted_pass._run_verification_job",
+    @patch.object(consensus, "_run_verification_job",
         side_effect=RuntimeError("429 RESOURCE_EXHAUSTED"),
     )
-    @patch(
-        "mdr_generator.gap_targeted_pass.run_parallel",
+    @patch.object(consensus, "run_parallel",
         side_effect=lambda jobs, fn, **_kwargs: [fn(job) for job in jobs],
     )
-    @patch("mdr_generator.gap_targeted_pass.chunk_page_ranges", return_value=[(1, 1)])
-    @patch("mdr_generator.gap_targeted_pass.pdf_page_count", return_value=1)
-    @patch("mdr_generator.gap_targeted_pass.read_scope_pdf_bytes", return_value=b"pdf")
+    @patch.object(consensus, "chunk_page_ranges", return_value=[(1, 1)])
+    @patch.object(consensus, "pdf_page_count", return_value=1)
+    @patch.object(consensus, "read_scope_pdf_bytes", return_value=b"pdf")
     def test_quota_error_becomes_unknown_job(
         self, _read, _count, _ranges, _parallel, _run
     ):
@@ -228,8 +227,8 @@ class ScopeStabilityTests(unittest.TestCase):
             results[0].invalid_rows[0].startswith("transient_llm_error:")
         )
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_agreement_admits_without_arbiter(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
@@ -250,8 +249,8 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(audit["arbiter_resolved_count"], 0)
         self.assertEqual(scan.call_count, 1)
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_arbiter_decides_pass_disagreement(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
@@ -285,8 +284,8 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(row["arbiter_vote"], "absent")
         self.assertIn("Client responsibility", row["arbiter_reason"])
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_pass2_only_strong_goes_to_arbiter(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
@@ -319,8 +318,8 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertTrue(row["pass2_strong_only"])
         self.assertEqual(row["resolution"], "arbiter_decided")
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_arbiter_receives_pass_arguments_only(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
@@ -348,8 +347,8 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertNotIn("judge_a", context)
         self.assertNotIn("judge_b", context)
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_silent_arbiter_keeps_only_pass1(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
@@ -428,8 +427,8 @@ class ScopeStabilityTests(unittest.TestCase):
         )
         self.assertIn("claimed in 4 separate excerpts", prompt)
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_incomplete_arbiter_is_fail_open_for_pass1(self, scan, _examples):
         verification = _result([self.a, self.b, self.c], {})
         scan.side_effect = [
@@ -448,8 +447,8 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(final_pairs, {self.a})
         self.assertEqual(audit["fallback_count"], 1)
 
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
+    @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
+    @patch.object(consensus, "_scan_catalog")
     def test_sonnet_pass2_and_gemini_arbiter(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
@@ -480,16 +479,14 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(audit["arbiter_scope"], "whole_document")
         self.assertEqual(scan.call_count, 2)
 
-    @patch(
-        "mdr_generator.gap_targeted_pass.run_parallel",
+    @patch.object(consensus, "run_parallel",
         side_effect=lambda jobs, fn, **_kwargs: [fn(job) for job in jobs],
     )
-    @patch(
-        "mdr_generator.gap_targeted_pass.chunk_page_ranges",
+    @patch.object(consensus, "chunk_page_ranges",
         return_value=[(1, 10), (9, 20)],
     )
-    @patch("mdr_generator.gap_targeted_pass.pdf_page_count", return_value=20)
-    @patch("mdr_generator.gap_targeted_pass.read_scope_pdf_bytes", return_value=b"pdf")
+    @patch.object(consensus, "pdf_page_count", return_value=20)
+    @patch.object(consensus, "read_scope_pdf_bytes", return_value=b"pdf")
     def test_arbiter_job_covers_the_whole_pdf(self, _read, _count, _ranges, _parallel):
         seen: list[tuple[int, int]] = []
 
@@ -497,10 +494,7 @@ class ScopeStabilityTests(unittest.TestCase):
             seen.append((job.page_start, job.page_end))
             return _result(list(job.target_list), {}, tie_break=job.tie_break)
 
-        with patch(
-            "mdr_generator.gap_targeted_pass._run_verification_job",
-            side_effect=fake_job,
-        ):
+        with patch.object(consensus, "_run_verification_job", side_effect=fake_job):
             _scan_catalog(
                 [Path("scope.pdf")], [[self.a]], "model", {}, tie_break=True
             )

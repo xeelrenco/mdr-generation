@@ -10,9 +10,9 @@ from mdr_generator.models import NormalizedSignal, PipelineSummary, RaciCandidat
 from mdr_generator.raci_vocabulary import RaciVocabulary
 
 
-exclusions = importlib.import_module("mdr_generator.2d_scope_exclusions")
-basis_gate = importlib.import_module("mdr_generator.3e_sow_basis_gate")
-qa_report = importlib.import_module("mdr_generator.7_qa_report")
+exclusions = importlib.import_module("mdr_generator.4_scope_exclusions")
+basis_gate = importlib.import_module("mdr_generator.6_sow_basis_gate")
+qa_report = importlib.import_module("mdr_generator.14_qa_report")
 
 
 def _candidate(key: str, discipline: str, chapter: str) -> RaciCandidate:

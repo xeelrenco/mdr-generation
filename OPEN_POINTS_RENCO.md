@@ -14,7 +14,7 @@ Checklist di decisioni aperte sul generatore MDR. Aggiornare quando Renco rispon
 
 **Da chiedere:** è accettabile, oppure un predecessore senza durata dovrebbe comunque bloccare il successore (es. usando una durata minima di default, o segnalando errore)?
 
-**Riferimento codice:** `mdr_generator/5_schedule.py` — calcolo `pred_finish_pairs` e `finish_by_key`.
+**Riferimento codice:** `mdr_generator/12_schedule.py` — calcolo `pred_finish_pairs` e `finish_by_key`.
 
 ---
 
@@ -50,7 +50,7 @@ Checklist di decisioni aperte sul generatore MDR. Aggiornare quando Renco rispon
 - scelta esplicita di quale arco ignorare (non alfabetico);
 - altro criterio (es. priorità per disciplina/capitolo).
 
-**Riferimento codice:** `mdr_generator/5_schedule.py` — `_topological_order`, `_schedule_line_items`.
+**Riferimento codice:** `mdr_generator/12_schedule.py` — `_topological_order`, `_schedule_line_items`.
 
 ---
 

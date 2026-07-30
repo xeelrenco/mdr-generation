@@ -1,4 +1,4 @@
-"""Step 4: Rank candidates using consolidated historical MATCH prior."""
+"""Step 8: Rank candidates using consolidated historical MATCH prior."""
 
 from __future__ import annotations
 

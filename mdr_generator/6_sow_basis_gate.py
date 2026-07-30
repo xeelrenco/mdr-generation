@@ -1,6 +1,6 @@
-"""Step 3e: keep a candidate document only if the SoW gives its subject a basis.
+"""Step 7: keep a candidate document only if the SoW gives its subject a basis.
 
-Generalist counterpart of step 2d: 2d removes what the SoW assigns to the client or
+Generalist counterpart of step 4: step 4 removes what the SoW assigns to the client or
 excludes explicitly, this gate removes catalog documents whose subject never appears in
 the project at all (a chapter can be in scope while some of its documents are not).
 """

@@ -17,7 +17,7 @@ from mdr_generator.utils import parse_json_response
 
 
 normalize = importlib.import_module("mdr_generator.2_normalize")
-gap = importlib.import_module("mdr_generator.gap_targeted_pass")
+gap = importlib.import_module("mdr_generator.3_catalog_consensus")
 
 
 def _raw(

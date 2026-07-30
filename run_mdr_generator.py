@@ -2,8 +2,11 @@
 """
 MDR Generator v1 — Scope PDF to Master Document Register.
 
-Step 1: ogni PDF in input/SoW/ viene inviato all'LLM che estrae discipline/chapter RACI.
-Step 3b+: istanze Scalable, durata timeline, schedule opzionale.
+Step (ordine esecuzione):
+  1 scope LLM → 2 normalize → 3 consenso catalogo → 4 esclusioni SoW
+  → 5 profili → 6 candidati → 7 basis gate → 8 ranking storico
+  → 9 scalable → 10 title enrichment → 11 espansione righe
+  → 12 schedule → 13 confronto Renco → 14 Excel → 15 report QA
 
 Usage:
   python run_mdr_generator.py --project-name "7350"
@@ -57,34 +60,34 @@ from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import format_elapsed_seconds, resolve_json_output_dir, save_json
 
 _im = importlib.import_module
-fetch_raci_candidates = _im("mdr_generator.3_candidates").fetch_raci_candidates
-save_candidates_csv = _im("mdr_generator.3_candidates").save_candidates_csv
-apply_historical_ranking = _im("mdr_generator.4_historical").apply_historical_ranking
-HOURS_PER_DURATION_DAY = _im("mdr_generator.4_manhours").HOURS_PER_DURATION_DAY
+fetch_raci_candidates = _im("mdr_generator.5_candidates").fetch_raci_candidates
+save_candidates_csv = _im("mdr_generator.5_candidates").save_candidates_csv
+apply_historical_ranking = _im("mdr_generator.7_historical").apply_historical_ranking
+HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 consolidate_normalized_signals = _im(
     "mdr_generator.2_normalize"
 ).consolidate_normalized_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
-run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_pass
+run_gap_targeted_pass = _im("mdr_generator.3_catalog_consensus").run_gap_targeted_pass
 run_scope_exclusion_pass = _im(
-    "mdr_generator.2d_scope_exclusions"
+    "mdr_generator.4_scope_exclusions"
 ).run_scope_exclusion_pass
 apply_document_exclusions = _im(
-    "mdr_generator.2d_scope_exclusions"
+    "mdr_generator.4_scope_exclusions"
 ).apply_document_exclusions
-run_sow_basis_gate = _im("mdr_generator.3e_sow_basis_gate").run_sow_basis_gate
-write_qa_report = _im("mdr_generator.7_qa_report").write_qa_report
+run_sow_basis_gate = _im("mdr_generator.6_sow_basis_gate").run_sow_basis_gate
+write_qa_report = _im("mdr_generator.14_qa_report").write_qa_report
 extract_scope_signals = _im("mdr_generator.1_scope_extract").extract_scope_signals
-run_document_scope_pass = _im("mdr_generator.3b_document_scope").run_document_scope_pass
+run_document_scope_pass = _im("mdr_generator.8_document_scope").run_document_scope_pass
 run_title_enrichment_pass = _im(
-    "mdr_generator.3d_title_enrichment"
+    "mdr_generator.9_title_enrichment"
 ).run_title_enrichment_pass
 expand_scope_to_line_items = _im(
-    "mdr_generator.3c_instance_expansion"
+    "mdr_generator.10_instance_expansion"
 ).expand_scope_to_line_items
-run_schedule_pass = _im("mdr_generator.5_schedule").run_schedule_pass
-write_mdr_excel = _im("mdr_generator.6_excel_output").write_mdr_excel
+run_schedule_pass = _im("mdr_generator.12_schedule").run_schedule_pass
+write_mdr_excel = _im("mdr_generator.13_excel_output").write_mdr_excel
 
 
 def _parse_args() -> argparse.Namespace:
@@ -139,7 +142,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-title-enrichment",
         action="store_true",
-        help="Disabilita Step 3d arricchimento/split titoli SoW",
+        help="Disabilita Step 10 arricchimento/split titoli SoW",
     )
     p.add_argument(
         "--scope-only",
@@ -275,12 +278,12 @@ def main() -> int:
     else:
         print("LLM pass 2 (consenso catalogo): disabilitato")
     print(
-        f"Schedule (Step 5):   "
+        f"Schedule (Step 12):  "
         f"{'attivo (durata, MANHOURS, date)' if schedule_enabled else 'disabilitato'}"
         f"{' + debug columns' if schedule_debug_columns else ''}"
     )
     print(
-        f"Title enrichment (3d): {'attivo (v2 split)' if title_enrichment_enabled else 'disabilitato'}"
+        f"Title enrichment (10): {'attivo (v2 split)' if title_enrichment_enabled else 'disabilitato'}"
     )
     print(f"LLM parallel workers: {llm_parallel_workers()}")
     print(f"Output Excel:      {output_dir}")
@@ -338,7 +341,7 @@ def main() -> int:
 
         if pass2_enabled:
             print(
-                "Step 2c: verifica completa catalogo RACI e consenso pair..."
+                "Step 3: verifica completa catalogo RACI e consenso pair..."
             )
             consensus_signals, gap_pass_audit, gap_raw = run_gap_targeted_pass(
                 scope_pdfs,
@@ -416,7 +419,7 @@ def main() -> int:
             print(f"Audit archiviati: {archived}")
             return 0
 
-        print("Step 2d: esclusioni SoW (committente / fuori scope)...")
+        print("Step 4: esclusioni SoW (committente / fuori scope)...")
         normalized, scope_exclusions, exclusion_audit = run_scope_exclusion_pass(
             scope_pdfs,
             normalized,
@@ -436,14 +439,14 @@ def main() -> int:
             f"{exclusion_audit.get('pairs_after', '?')} "
             f"(-{exclusion_audit.get('pairs_dropped', 0)})"
         )
-        print("Step 3a: profili documento (Scalable, timeline, esempi storici)...")
+        print("Step 5: profili documento (Scalable, timeline, esempi storici)...")
         profiles = load_document_effort_profiles(conn)
         save_document_effort_profiles(
             profiles, json_dir / "document_effort_profiles.json"
         )
         print(f"  -> {len(profiles)} profili TitleKey")
 
-        print("Step 3: candidati RACI da raci_matrix.v_DocumentsEnriched...")
+        print("Step 6: candidati RACI da raci_matrix.v_DocumentsEnriched...")
         candidates = candidates_before_exclusions
         candidates, exclusion_audit = apply_document_exclusions(
             candidates,
@@ -457,7 +460,7 @@ def main() -> int:
             normalized = normalized_before_exclusions
             save_normalized(normalized, uncertain, norm_json)
             print(
-                "  -> risultato 2d non applicato: "
+                "  -> risultato Step 4 non applicato: "
                 f"{exclusion_audit.get('documents_flagged', 0)} documenti segnalati "
                 f"su {exclusion_audit.get('candidates_before', 0)}"
             )
@@ -469,11 +472,11 @@ def main() -> int:
         if exclusion_audit.get("transient_error_count"):
             print(
                 "  -> ATTENZIONE: "
-                f"{exclusion_audit['transient_error_count']} chiamate 2d transitorie "
+                f"{exclusion_audit['transient_error_count']} chiamate Step 4 transitorie "
                 "ignorate in fail-open (dettagli nell'audit)"
             )
 
-        print("Step 3e: verifica base SoW per documento (temi non previsti)...")
+        print("Step 7: verifica base SoW per documento (temi non previsti)...")
         candidates, basis_gate_audit = run_sow_basis_gate(
             scope_pdfs,
             candidates,
@@ -487,7 +490,7 @@ def main() -> int:
         if basis_gate_audit.get("transient_error_count"):
             print(
                 "  -> ATTENZIONE: "
-                f"{basis_gate_audit['transient_error_count']} chiamate 3e transitorie "
+                f"{basis_gate_audit['transient_error_count']} chiamate Step 7 transitorie "
                 "ignorate in fail-open (dettagli nell'audit)"
             )
         save_candidates_csv(candidates, candidates_csv)
@@ -503,14 +506,14 @@ def main() -> int:
                 f"(-{basis_gate_audit.get('documents_dropped', 0)} senza base nello SoW)"
             )
 
-        print("Step 4: ranking storico (solo MATCH consolidati)...")
+        print("Step 8: ranking storico (solo MATCH consolidati)...")
         ranked = apply_historical_ranking(conn, candidates)
         with_hist = sum(1 for c in ranked if c.historical_count > 0)
         print(f"  -> {with_hist} con storico, {len(ranked) - with_hist} senza")
 
         discipline_short_codes = load_discipline_short_codes(conn)
 
-        print("Step 3b: istanze Scalable (LLM su estratti SoW raggruppati per coppia)...")
+        print("Step 9: istanze Scalable (LLM su estratti SoW raggruppati per coppia)...")
         scope_decisions, _scope_audit = run_document_scope_pass(
             scope_pdfs,
             raw_signals,
@@ -528,7 +531,7 @@ def main() -> int:
         )
 
         if title_enrichment_enabled:
-            print("Step 3d: titoli SoW-specifici e split righe (sow_elements)...")
+            print("Step 10: titoli SoW-specifici e split righe (sow_elements)...")
             title_model = cfg("TITLE_ENRICHMENT_LLM_MODEL") or args.scope_llm_model
             scope_decisions, title_enrichment_audit = run_title_enrichment_pass(
                 scope_pdfs,
@@ -555,16 +558,16 @@ def main() -> int:
                 },
             )
 
-        print("Step 3c: espansione istanze MDR...")
+        print("Step 11: espansione istanze MDR...")
         line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
 
         if schedule_enabled:
             print(
-                "Step 5: schedule (durata timeline, MANHOURS, PLANNED FIRST ISSUE, ordine righe)..."
+                "Step 12: schedule (durata timeline, MANHOURS, PLANNED FIRST ISSUE, ordine righe)..."
             )
         else:
-            print("Step 5: schedule disabilitato (durata, MANHOURS e date non compilate)...")
+            print("Step 12: schedule disabilitato (durata, MANHOURS e date non compilate)...")
         line_items, sched_audit = run_schedule_pass(
             conn,
             line_items,
@@ -589,7 +592,7 @@ def main() -> int:
 
         qa_project = cfg("PROJECT_CODE", project)
         print(
-            f"Step 6: confronto QA vs storico MDR progetto {qa_project} (MotherDuck)..."
+            f"Step 13: confronto QA vs storico MDR progetto {qa_project} (MotherDuck)..."
         )
         from mdr_generator.renco_compare import build_renco_comparison
 
@@ -614,7 +617,7 @@ def main() -> int:
             print(f"ERRORE: template non trovato: {template_path}", file=sys.stderr)
             return 1
 
-        print("Step 8: compilazione template MDR...")
+        print("Step 14: compilazione template MDR...")
         write_mdr_excel(
             template_path,
             mdr_path,
@@ -718,7 +721,7 @@ def main() -> int:
         consensus_audit=gap_pass_audit,
     )
     archived_json = archive_json_run(json_dir, output_dir, project, ts)
-    print(f"Step 7: report qualità -> {report_path}")
+    print(f"Step 15: report qualità -> {report_path}")
     print(f"Audit archiviati: {archived_json}")
     print(f"Tempo totale pipeline: {elapsed_label}")
     print(format_usage_console(llm_usage))

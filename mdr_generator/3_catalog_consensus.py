@@ -1,4 +1,4 @@
-"""Step 2c: stable full-catalog verification and pair-level LLM consensus."""
+"""Step 3: stable full-catalog verification and pair-level LLM consensus."""
 
 from __future__ import annotations
 
@@ -574,7 +574,7 @@ def run_gap_targeted_pass(
     )
 
     print(
-        f"  Step 2c: verifica completa catalogo RACI — {len(catalog_pairs)} coppie, "
+        f"  Step 3: verifica completa catalogo RACI — {len(catalog_pairs)} coppie, "
         f"{len(batches)} batch ({pass2_provider}/{pass2_model})"
     )
     verification_results = _scan_catalog(
