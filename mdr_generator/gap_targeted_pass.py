@@ -27,6 +27,7 @@ from .scope_pdf import (
     pdf_page_count,
     read_scope_pdf_bytes,
     resolve_scope_llm_config,
+    unique_pdf_labels,
 )
 
 _norm = __import__("importlib").import_module("mdr_generator.2_normalize")
@@ -257,8 +258,9 @@ def _run_verification_job(
         )
     chunk_bytes = extract_scope_pdf_pages(pdf_bytes, job.page_start, job.page_end)
     label = "arbiter" if job.arbiter else "tie" if job.tie_break else "verify"
+    source_token = hashlib.sha256(job.source_pdf.encode("utf-8")).hexdigest()[:8]
     upload_name = (
-        f"{pdf_path.stem}_{label}_b{job.batch_index + 1}_"
+        f"{pdf_path.stem}_{source_token}_{label}_b{job.batch_index + 1}_"
         f"p{job.page_start}-{job.page_end}.pdf"
     )
     data = call_scope_llm_pdf(
@@ -406,9 +408,11 @@ def _scan_catalog(
     chunk_pages = max(1, cfg_int("SCOPE_PASS2_CHUNK_PAGES", 10))
     overlap = max(0, cfg_int("SCOPE_PASS2_CHUNK_OVERLAP", 1))
     job_index = 0
+    pdf_labels = unique_pdf_labels(list(scope_pdfs))
     for pdf_path in sorted(scope_pdfs, key=lambda path: str(path).lower()):
         pdf_bytes = read_scope_pdf_bytes(pdf_path)
         total_pages = pdf_page_count(pdf_bytes)
+        source_label = pdf_labels[pdf_path]
         # Judges and arbiter read the whole SoW: negations and "existing plant"
         # qualifiers are usually outside the chunk that names the system.
         ranges = (
@@ -422,7 +426,7 @@ def _scan_catalog(
                 jobs.append(
                     _VerificationJob(
                         idx=job_index,
-                        source_pdf=pdf_path.name,
+                        source_pdf=source_label,
                         page_start=page_start,
                         page_end=page_end,
                         total_pages=total_pages,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mdr_generator.models import NormalizedSignal, RawScopeSignal
 from mdr_generator.pair_scope_context import collect_pair_evidence
@@ -14,6 +15,7 @@ from mdr_generator.scope_pdf import (
 
 
 normalize = importlib.import_module("mdr_generator.2_normalize")
+gap = importlib.import_module("mdr_generator.gap_targeted_pass")
 
 
 def _raw(
@@ -152,6 +154,39 @@ class ScopeNormalizationTests(unittest.TestCase):
         labels = unique_pdf_labels(pdfs)
         self.assertNotEqual(labels[pdfs[0]], labels[pdfs[1]])
         self.assertEqual(labels, unique_pdf_labels(pdfs))
+
+    def test_pass2_disambiguates_equal_pdf_names_and_uploads(self):
+        pdfs = [Path("a/scope.pdf"), Path("b/scope.pdf")]
+        response = {
+            "decisions": [
+                {
+                    "discipline_code": self.a[0],
+                    "chapter_name": self.a[1],
+                    "present": False,
+                    "reason": "not present",
+                }
+            ]
+        }
+        with (
+            patch.object(gap, "read_scope_pdf_bytes", return_value=b"%PDF"),
+            patch.object(gap, "pdf_page_count", return_value=1),
+            patch.object(gap, "extract_scope_pdf_pages", return_value=b"%PDF"),
+            patch.object(gap, "call_scope_llm_pdf", return_value=response) as call,
+        ):
+            results = gap._scan_catalog(
+                pdfs,
+                [[self.a]],
+                "gemini-2.5-pro",
+                {},
+                tie_break=False,
+            )
+
+        source_labels = {result.job.source_pdf for result in results}
+        upload_names = {
+            invocation.kwargs["upload_name"] for invocation in call.call_args_list
+        }
+        self.assertEqual(len(source_labels), 2)
+        self.assertEqual(len(upload_names), 2)
 
 
 if __name__ == "__main__":
