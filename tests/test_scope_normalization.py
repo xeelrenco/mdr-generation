@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from mdr_generator.scope_pdf import (
     _sanitize_chunk_signal_pages,
     unique_pdf_labels,
 )
+from mdr_generator.utils import parse_json_response
 
 
 normalize = importlib.import_module("mdr_generator.2_normalize")
@@ -187,6 +189,33 @@ class ScopeNormalizationTests(unittest.TestCase):
         }
         self.assertEqual(len(source_labels), 2)
         self.assertEqual(len(upload_names), 2)
+
+    def test_json_parser_uses_first_complete_payload_when_extra_data_follows(self):
+        parsed = parse_json_response(
+            '{"decisions": [{"present": false}]}\n'
+            '{"decisions": [{"present": true}]}'
+        )
+        self.assertEqual(parsed, {"decisions": [{"present": False}]})
+
+    def test_pass2_malformed_json_becomes_unknown_instead_of_failing(self):
+        error = json.JSONDecodeError("Extra data", '{"decisions": []} x', 17)
+        with (
+            patch.object(gap, "read_scope_pdf_bytes", return_value=b"%PDF"),
+            patch.object(gap, "pdf_page_count", return_value=1),
+            patch.object(gap, "extract_scope_pdf_pages", return_value=b"%PDF"),
+            patch.object(gap, "call_scope_llm_pdf", side_effect=error),
+        ):
+            results = gap._scan_catalog(
+                [Path("scope.pdf")],
+                [[self.a]],
+                "gemini-2.5-pro",
+                {},
+                tie_break=False,
+            )
+
+        self.assertEqual(results[0].decisions, {})
+        self.assertEqual(results[0].missing_pairs, [self.a])
+        self.assertTrue(results[0].invalid_rows[0].startswith("invalid_llm_json:"))
 
 
 if __name__ == "__main__":

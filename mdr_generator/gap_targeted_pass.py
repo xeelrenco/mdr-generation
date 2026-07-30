@@ -111,6 +111,31 @@ def _is_transient_quota_error(error: BaseException) -> bool:
     return is_transient_llm_error(error)
 
 
+def _is_invalid_llm_json(error: BaseException) -> bool:
+    """Find a JSON parsing failure, including one wrapped by tenacity."""
+    pending: List[BaseException] = [error]
+    seen: Set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, json.JSONDecodeError):
+            return True
+        for nested in (current.__cause__, current.__context__):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+        last_attempt = getattr(current, "last_attempt", None)
+        if last_attempt is not None:
+            try:
+                nested = last_attempt.exception()
+            except Exception:
+                nested = None
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+    return False
+
+
 @dataclass(frozen=True)
 class _VerificationJob:
     idx: int
@@ -465,16 +490,20 @@ def _scan_catalog(
                     job, pdf_path, pdf_bytes, model, pair_examples, arbiter_context
                 )
             except Exception as error:
-                if not _is_transient_quota_error(error):
+                invalid_json = _is_invalid_llm_json(error)
+                if not (_is_transient_quota_error(error) or invalid_json):
                     raise
-                # A quota spike must not discard the whole run. Missing decisions
-                # become unknown and are routed to tie-break/fail-open.
+                # Provider failures and malformed responses must not discard the
+                # whole run. Unknown decisions are routed to judges/fail-open.
+                error_kind = (
+                    "invalid_llm_json" if invalid_json else "transient_llm_error"
+                )
                 return _VerificationResult(
                     job=job,
                     decisions={},
                     positive_raw={},
                     missing_pairs=list(job.target_list),
-                    invalid_rows=[f"transient_quota_error:{str(error)[:300]}"],
+                    invalid_rows=[f"{error_kind}:{str(error)[:300]}"],
                 )
 
         all_results.extend(

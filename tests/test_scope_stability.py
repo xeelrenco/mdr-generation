@@ -223,7 +223,7 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(results[0].decisions, {})
         self.assertEqual(results[0].missing_pairs, [self.a])
         self.assertTrue(
-            results[0].invalid_rows[0].startswith("transient_quota_error:")
+            results[0].invalid_rows[0].startswith("transient_llm_error:")
         )
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})

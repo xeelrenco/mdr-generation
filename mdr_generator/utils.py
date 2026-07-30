@@ -39,7 +39,16 @@ def extract_json_payload(raw_text: str) -> str:
 
 def parse_json_response(raw_text: str) -> Any:
     cleaned = extract_json_payload(raw_text)
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as error:
+        if error.msg != "Extra data":
+            raise
+        # Some providers occasionally append commentary or repeat a JSON object
+        # despite response_mime_type=json. Keep the first complete payload; any
+        # omitted decisions remain unknown and are handled by pipeline guards.
+        value, _end = json.JSONDecoder().raw_decode(cleaned)
+        return value
 
 
 def safe_excel_value(value: Any) -> Any:
