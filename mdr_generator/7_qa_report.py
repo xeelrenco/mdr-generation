@@ -53,11 +53,10 @@ CATEGORY_IT = {
 
 
 _CONSENSUS_RULE_IT = {
-    "pass2_strong_direct": "Evidenza strong pass 2",
-    "judges_agree": "Giudici concordi",
     "arbiter_decided": "Arbitro",
     "arbiter_no_verdict": "Arbitro senza verdetto",
-    "fail_open_incomplete": "Fail-open (risposta incompleta)",
+    "fail_open_incomplete": "Fail-open (pass 1)",
+    "agreement": "Accordo pass 1 / pass 2",
 }
 
 
@@ -262,7 +261,7 @@ def write_qa_report(
         [
             "Pass 2 consenso catalogo",
             "Sì" if summary.scope_pass2_enabled else "No",
-            "Verifica indipendente dell'intero catalogo + tie-break sui disaccordi",
+            "Verifica indipendente dell'intero catalogo; Gemini arbitra i disaccordi",
         ],
         [
             "Provider / modello pass 2",
@@ -281,16 +280,7 @@ def write_qa_report(
         [
             "Coppie finali dopo consenso",
             summary.scope_pass2_pairs_final if summary.scope_pass2_enabled else "—",
-            "Accordo pass 1/pass 2, evidenza strong, giudici o arbitro",
-        ],
-        [
-            "Giudici sulle coppie contese",
-            (
-                summary.scope_pass2_judges or "—"
-                if summary.scope_pass2_enabled
-                else "—"
-            ),
-            "Voto cieco sul PDF completo: se concordano la decisione è loro",
+            "Accordo pass 1/pass 2 oppure decisione dell'arbitro",
         ],
         [
             "Coppie contese",
@@ -298,24 +288,24 @@ def write_qa_report(
             "Disaccordo pass 1/pass 2 o risposte pass 2 incomplete",
         ],
         [
-            "Arbitro sui disaccordi tra giudici",
+            "Arbitro sui disaccordi",
             (
                 f"{summary.scope_pass2_arbiter_model or '—'} — "
-                f"{summary.scope_pass2_judges_disagree} coppie, "
+                f"{summary.scope_pass2_disagreements} coppie, "
                 f"{summary.scope_pass2_arbiter_present} ammesse"
                 if summary.scope_pass2_enabled
                 else "—"
             ),
-            "Legge PDF completo e argomenti dei due giudici, poi decide",
+            "Legge PDF completo e argomenti di Pass 1 e Pass 2, poi decide",
         ],
         [
-            "Ammesse da evidenza strong",
+            "Pass2-only strong",
             (
-                summary.scope_pass2_strong_direct
+                summary.scope_pass2_strong_only
                 if summary.scope_pass2_enabled
                 else "—"
             ),
-            "Non trovate dal pass 1 ma con evidenza strong: entrano senza giudici",
+            "Non trovate dal pass 1: la strong resta evidenza e va all'arbitro",
         ],
         [
             "Coppie senza verdetto dell'arbitro",
@@ -329,7 +319,7 @@ def write_qa_report(
         [
             "Fail-open per risposta incompleta",
             summary.scope_pass2_fallbacks if summary.scope_pass2_enabled else "—",
-            "Pair mantenute perché il tie-break non ha dato una decisione completa",
+            "Pair mantenute perché l'arbitro non ha dato una decisione completa",
         ],
         [
             "Stabilità vs run precedente (Jaccard)",
@@ -657,13 +647,11 @@ def write_qa_report(
             item.get("pass2_vote", ""),
             item.get("pass2_support_chunks", ""),
             "Sì" if item.get("pass2_has_strong") else "No",
-            item.get("judge1_vote", ""),
-            item.get("judge2_vote", ""),
             item.get("arbiter_vote", ""),
-            (item.get("arbiter_reason") or item.get("judge1_reason") or "")[:300],
+            (item.get("arbiter_reason") or "")[:300],
         ]
         for item in decisions
-    ] or [["—"] * 12]
+    ] or [["—"] * 10]
     _write_table(
         ws,
         row,
@@ -676,13 +664,11 @@ def write_qa_report(
             "Pass 2",
             "Conferme pass 2",
             "Evidenza strong",
-            "Giudice 1",
-            "Giudice 2",
             "Arbitro",
             "Motivazione",
         ],
         consensus_rows,
-        [10, 26, 22, 10, 10, 10, 12, 12, 12, 12, 12, 46],
+        [10, 26, 22, 10, 10, 10, 12, 12, 12, 46],
     )
 
     # --- Foglio 3b: Esclusioni_SoW (Step 2d) ---

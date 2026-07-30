@@ -512,10 +512,10 @@ def build_arbiter_prompt(
     total_pages: int,
     pair_examples: Optional[Dict[Tuple[str, str], List[str]]] = None,
 ) -> str:
-    """Deciding pass for pairs where the two independent judges disagreed.
+    """Deciding pass when Pass 1 and Pass 2 disagree or Pass 2 is incomplete.
 
-    The arbiter is the only stage that sees the other stages' arguments, so it can
-    weigh them against the complete SoW instead of voting blind a third time.
+    The arbiter is the only stage that sees both earlier arguments, so it can weigh
+    them against the complete SoW instead of repeating either earlier model.
     """
     blocks: List[str] = []
     for (disc, chap), context in sorted(pair_context, key=lambda item: item[0]):
@@ -526,30 +526,24 @@ def build_arbiter_prompt(
         rows = [f"- {disc} | {chap}{suffix}"]
         rows.extend(
             _format_arbiter_verdict(
-                "Discovery pass (read the SoW in excerpts, different model)",
+                "Pass 1 discovery (read the SoW in excerpts, independent model)",
                 context.get("pass1"),
             )
         )
         rows.extend(
             _format_arbiter_verdict(
-                "Catalog verification pass (read the SoW in excerpts, YOUR earlier run)",
+                "Pass 2 catalog verification (read the SoW in excerpts, independent model)",
                 context.get("pass2"),
             )
-        )
-        rows.extend(
-            _format_arbiter_verdict("Judge A (read the complete SoW)", context.get("judge_a"))
-        )
-        rows.extend(
-            _format_arbiter_verdict("Judge B (read the complete SoW)", context.get("judge_b"))
         )
         blocks.append("\n".join(rows))
     pairs_block = "\n\n".join(blocks)
     return f"""You are the deciding arbiter on official RACI discipline+chapter pairs for an
 EPC/engineering Scope of Work (SoW).
 
-Two judges read the COMPLETE SoW independently and disagreed on the pairs below, or one of
-them failed to answer. You read the COMPLETE SoW too ({total_pages} pages, attached in full)
-and you see every earlier verdict with its argument. Your decision is final.
+Two independent models already evaluated the SoW in excerpts and disagreed on the pairs
+below, or one of them failed to answer. You read the COMPLETE SoW ({total_pages} pages,
+attached in full) and you see every earlier verdict with its argument. Your decision is final.
 
 CONTESTED PAIRS AND EARLIER VERDICTS:
 {pairs_block}
@@ -571,9 +565,9 @@ present=false, even when the chapter subject appears in the text, whenever the t
 How to arbitrate:
 - Verify every quoted argument against the attached SoW before trusting it. A quote that is
   negated, conditional or about existing plant does not support the pair.
-- The two chunked passes saw only excerpts, so they could not see a negation or a Client
-  responsibility stated elsewhere. The verification pass is your own earlier output: judge it
-  as critically as the others and do not confirm it out of consistency.
+- Both earlier passes saw only excerpts, so they could not see a negation or a Client
+  responsibility stated elsewhere. Treat both critically; do not confirm either out of
+  consistency with their previous answer.
 - Count arguments, not votes: a single well-quoted obligation outweighs several generic
   claims, and an argument that misreads the SoW carries no weight.
 - Decide every contested pair; never omit one and never invent support that you cannot quote.

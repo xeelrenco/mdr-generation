@@ -384,11 +384,6 @@ def _pass1_verdict(
     }
 
 
-def _judges_agree(votes: Sequence[Optional[bool]], expected: int) -> bool:
-    decided = [vote for vote in votes if vote is not None]
-    return len(decided) == expected and expected > 0 and len(set(decided)) == 1
-
-
 def _has_strong_support(positives: Sequence[RawScopeSignal]) -> bool:
     """One strong verification hit admits a pair the discovery pass missed."""
     return any(raw.confidence == "strong" for raw in positives)
@@ -438,7 +433,7 @@ def _scan_catalog(
         pdf_bytes = read_scope_pdf_bytes(pdf_path)
         total_pages = pdf_page_count(pdf_bytes)
         source_label = pdf_labels[pdf_path]
-        # Judges and arbiter read the whole SoW: negations and "existing plant"
+        # The arbiter reads the whole SoW: negations and "existing plant"
         # qualifiers are usually outside the chunk that names the system.
         ranges = (
             [(1, total_pages)]
@@ -494,7 +489,7 @@ def _scan_catalog(
                 if not (_is_transient_quota_error(error) or invalid_json):
                     raise
                 # Provider failures and malformed responses must not discard the
-                # whole run. Unknown decisions are routed to judges/fail-open.
+                # whole run. Unknown decisions are routed to the arbiter/fail-open.
                 error_kind = (
                     "invalid_llm_json" if invalid_json else "transient_llm_error"
                 )
@@ -571,20 +566,11 @@ def run_gap_targeted_pass(
     batch_size = max(1, cfg_int("SCOPE_PASS2_BATCH_SIZE", 30))
     batches = _batch_catalog_pairs(catalog_pairs, batch_size)
     pair_examples = _fetch_catalog_pair_examples(conn, sorted(catalog_pairs))
-    # Two judges from two vendors vote blind on the contested pairs; where they
-    # disagree the arbiter reads their arguments and decides.
-    judge_models = [
-        cfg("SCOPE_PASS2_TIEBREAK_LLM_MODEL", "").strip()
-        or resolve_scope_llm_config("pass1")[1],
-        cfg("SCOPE_PASS2_TIEBREAK_LLM_MODEL_2", "claude-haiku-4-5"),
-    ]
-    judges = [
-        resolve_scope_llm_config("pass2", cli_model=name)
-        for name in judge_models
-        if name.strip()
-    ]
+    arbiter_cli = (
+        cfg("SCOPE_PASS2_ARBITER_LLM_MODEL", "").strip() or "gemini-2.5-pro"
+    )
     arbiter_provider, arbiter_model = resolve_scope_llm_config(
-        "pass2", cli_model=cfg("SCOPE_PASS2_ARBITER_LLM_MODEL", "").strip() or None
+        "pass2", cli_model=arbiter_cli
     )
 
     print(
@@ -601,9 +587,9 @@ def run_gap_targeted_pass(
     pass2_votes, pass2_positive, _pass2_verdicts = _aggregate_votes(
         catalog_pairs, verification_results
     )
-    # A strong verification hit admits the pair on its own; anything weaker that
-    # pass 1 did not see is left to the judges.
-    strong_direct_pairs = {
+    # Confidence from one model is evidence, not consensus. Pass2-only strong
+    # pairs remain visible in the audit but require independent confirmation.
+    pass2_strong_only_pairs = {
         pair
         for pair in catalog_pairs
         if pass2_votes[pair] is True
@@ -614,66 +600,28 @@ def run_gap_targeted_pass(
     tie_pairs = {
         pair
         for pair in catalog_pairs
-        if pair not in strong_direct_pairs
-        and (pass2_votes[pair] is None or pass1_votes[pair] != pass2_votes[pair])
+        if pass2_votes[pair] is None or pass1_votes[pair] != pass2_votes[pair]
     }
 
-    tie_run_rows: List[Dict[str, Any]] = []
-    judge_votes: List[Dict[Pair, Optional[bool]]] = []
-    judge_verdicts: List[Dict[Pair, Dict[str, Any]]] = []
-    tie_positive: Dict[Pair, List[RawScopeSignal]] = {}
-    if tie_pairs:
-        tie_batches = _batch_catalog_pairs(tie_pairs, batch_size)
-        for judge_index, (judge_provider, judge_model) in enumerate(judges, start=1):
-            print(
-                f"  Step 2c giudice {judge_index}/{len(judges)}: {len(tie_pairs)} "
-                f"disaccordi/unknown, {len(tie_batches)} batch "
-                f"({judge_provider}/{judge_model}, PDF completo)"
-            )
-            results = _scan_catalog(
-                scope_pdfs,
-                tie_batches,
-                judge_model,
-                pair_examples,
-                tie_break=True,
-            )
-            for row in _result_audit_rows(results):
-                row["judge"] = f"{judge_provider}/{judge_model}"
-                tie_run_rows.append(row)
-            votes, positives, _verdicts = _aggregate_votes(tie_pairs, results)
-            judge_votes.append(votes)
-            judge_verdicts.append(_aggregate_verdicts(tie_pairs, results))
-            for pair, raws in positives.items():
-                tie_positive.setdefault(pair, []).extend(raws)
-
-    # The judges vote blind, so their disagreement is exactly where a further blind
-    # vote adds nothing: the arbiter reads their arguments and decides instead.
-    arbiter_pairs = {
-        pair
-        for pair in tie_pairs
-        if not _judges_agree([votes.get(pair) for votes in judge_votes], len(judges))
-    }
-    partial_panel_pairs = {
-        pair
-        for pair in arbiter_pairs
-        if any(votes.get(pair) is None for votes in judge_votes)
-    }
+    # Pass 1 (GPT) and Pass 2 (Claude) are the two independent evaluations.
+    # Gemini arbitrates every disagreement or incomplete Pass 2 response once.
+    arbiter_pairs = set(tie_pairs)
+    arbiter_run_rows: List[Dict[str, Any]] = []
     arbiter_votes: Dict[Pair, Optional[bool]] = {}
+    arbiter_positive: Dict[Pair, List[RawScopeSignal]] = {}
     if arbiter_pairs:
         pass2_verdicts_by_pair = _aggregate_verdicts(catalog_pairs, verification_results)
         arbiter_context = {
             pair: {
                 "pass1": _pass1_verdict(pair, pass1_by_pair.get(pair)),
                 "pass2": pass2_verdicts_by_pair.get(pair),
-                "judge_a": judge_verdicts[0].get(pair) if judge_verdicts else None,
-                "judge_b": judge_verdicts[1].get(pair) if len(judge_verdicts) > 1 else None,
             }
             for pair in arbiter_pairs
         }
         print(
-            f"  Step 2c arbitro: {len(arbiter_pairs)} coppie su cui i giudici "
-            f"dissentono ({arbiter_provider}/{arbiter_model}, PDF completo + "
-            f"argomenti dei giudici)"
+            f"  Step 2c arbitro: {len(arbiter_pairs)} disaccordi/unknown tra "
+            f"Pass 1 e Pass 2 ({arbiter_provider}/{arbiter_model}, "
+            "PDF completo + argomenti dei due pass)"
         )
         arbiter_results = _scan_catalog(
             scope_pdfs,
@@ -685,14 +633,12 @@ def run_gap_targeted_pass(
             arbiter_context=arbiter_context,
         )
         for row in _result_audit_rows(arbiter_results):
-            row["judge"] = f"arbiter:{arbiter_provider}/{arbiter_model}"
-            tie_run_rows.append(row)
+            row["arbiter"] = f"{arbiter_provider}/{arbiter_model}"
+            arbiter_run_rows.append(row)
         arbiter_votes, arbiter_positive, _verdicts = _aggregate_votes(
             arbiter_pairs, arbiter_results
         )
         arbiter_verdicts = _aggregate_verdicts(arbiter_pairs, arbiter_results)
-        for pair, raws in arbiter_positive.items():
-            tie_positive.setdefault(pair, []).extend(raws)
     else:
         arbiter_verdicts = {}
 
@@ -703,9 +649,6 @@ def run_gap_targeted_pass(
     for pair in sorted(catalog_pairs):
         pass1_vote = pass1_votes[pair]
         pass2_vote = pass2_votes[pair]
-        if pair in strong_direct_pairs:
-            final_pairs.add(pair)
-            continue
         if pass2_vote is not None and pass1_vote == pass2_vote:
             if pass1_vote:
                 final_pairs.add(pair)
@@ -713,9 +656,8 @@ def run_gap_targeted_pass(
         if pair in arbiter_pairs:
             verdict = arbiter_votes.get(pair)
             if verdict is None:
-                # No arbitration available. Keep what the discovery pass quoted, but
-                # do not let a failed call promote a pair whose only support was a
-                # non-strong verification hit the judges could not confirm.
+                # No arbitration available. Keep what the discovery pass quoted,
+                # but do not promote a pair reported only by Pass 2.
                 arbiter_silent_pairs.add(pair)
                 if pass1_vote:
                     final_pairs.add(pair)
@@ -725,8 +667,6 @@ def run_gap_targeted_pass(
             if verdict:
                 final_pairs.add(pair)
             continue
-        if any(votes.get(pair) for votes in judge_votes):
-            final_pairs.add(pair)
 
     final_signals: List[NormalizedSignal] = []
     final_raw: List[RawScopeSignal] = []
@@ -734,7 +674,7 @@ def run_gap_targeted_pass(
         supports: List[NormalizedSignal] = []
         if pair in pass1_by_pair:
             supports.append(pass1_by_pair[pair])
-        for raw in pass2_positive.get(pair, []) + tie_positive.get(pair, []):
+        for raw in pass2_positive.get(pair, []) + arbiter_positive.get(pair, []):
             normalized = _raw_to_normalized(raw)
             if normalized is not None:
                 supports.append(normalized)
@@ -748,14 +688,10 @@ def run_gap_targeted_pass(
         positives = pass2_positive.get(pair, [])
         if pair in fallback_pairs:
             resolution = "fail_open_incomplete"
-        elif pair in strong_direct_pairs:
-            resolution = "pass2_strong_direct"
         elif pair in arbiter_resolved_pairs:
             resolution = "arbiter_decided"
         elif pair in arbiter_silent_pairs:
             resolution = "arbiter_no_verdict"
-        elif pair in tie_pairs:
-            resolution = "judges_agree"
         else:
             resolution = "agreement"
         row = {
@@ -765,18 +701,10 @@ def run_gap_targeted_pass(
             "pass2_vote": _vote_label(pass2_votes[pair]),
             "pass2_support_chunks": len(positives),
             "pass2_has_strong": any(raw.confidence == "strong" for raw in positives),
+            "pass2_strong_only": pair in pass2_strong_only_pairs,
             "final_decision": "present" if pair in final_pairs else "absent",
             "resolution": resolution,
         }
-        for judge_index, votes in enumerate(judge_votes, start=1):
-            contested = pair in tie_pairs
-            row[f"judge{judge_index}_vote"] = (
-                _vote_label(votes.get(pair)) if contested else "not_needed"
-            )
-            verdict = judge_verdicts[judge_index - 1].get(pair) or {}
-            row[f"judge{judge_index}_reason"] = (
-                str(verdict.get("reason") or "") if contested else ""
-            )
         row["arbiter_vote"] = (
             _vote_label(arbiter_votes.get(pair))
             if pair in arbiter_pairs
@@ -789,17 +717,14 @@ def run_gap_targeted_pass(
 
     audit: Dict[str, Any] = {
         "enabled": True,
-        "mode": "full_catalog_consensus",
+        "mode": "three_model_consensus",
         "provider": pass2_provider,
         "model": pass2_model,
-        "tiebreak_provider": judges[0][0],
-        "tiebreak_model": judges[0][1],
-        "tiebreak_judges": [f"{provider}/{model}" for provider, model in judges],
-        "tiebreak_rule": "two_blind_judges_then_informed_arbiter",
-        "tiebreak_scope": "whole_document",
         "arbiter_provider": arbiter_provider,
         "arbiter_model": arbiter_model,
-        "admission_rule": "pass2_strong_admits_directly_else_judges",
+        "arbiter_rule": "informed_third_model_on_pass_disagreement",
+        "arbiter_scope": "whole_document",
+        "admission_rule": "pass1_pass2_agreement_else_informed_arbiter",
         "pair_source": DOCUMENTS_ENRICHED_VIEW,
         "catalog_sha256": hashlib.sha256(
             json.dumps(sorted(catalog_pairs), ensure_ascii=False).encode("utf-8")
@@ -813,9 +738,9 @@ def run_gap_targeted_pass(
         ),
         "pass1_present_count": sum(pass1_votes.values()),
         "pass2_present_count": sum(value is True for value in pass2_votes.values()),
-        "strong_direct_count": len(strong_direct_pairs),
-        "strong_direct_pairs": [
-            f"{disc}|{chap}" for disc, chap in sorted(strong_direct_pairs)
+        "pass2_strong_only_count": len(pass2_strong_only_pairs),
+        "pass2_strong_only_pairs": [
+            f"{disc}|{chap}" for disc, chap in sorted(pass2_strong_only_pairs)
         ],
         "pass2_unknown_count": sum(value is None for value in pass2_votes.values()),
         "agreement_present_count": sum(
@@ -823,14 +748,8 @@ def run_gap_targeted_pass(
             for pair in catalog_pairs
         ),
         "disagreement_count": len(tie_pairs),
-        "tie_break_present_count": len(
-            {pair for pair in tie_pairs if pair in final_pairs}
-        ),
-        "judge_present_counts": [
-            sum(value is True for value in votes.values()) for votes in judge_votes
-        ],
-        "judges_disagree_count": len(arbiter_pairs),
-        "judges_disagree_pairs": [
+        "arbiter_target_count": len(arbiter_pairs),
+        "arbiter_target_pairs": [
             f"{disc}|{chap}" for disc, chap in sorted(arbiter_pairs)
         ],
         "arbiter_resolved_count": len(arbiter_resolved_pairs),
@@ -845,18 +764,17 @@ def run_gap_targeted_pass(
         "arbiter_no_verdict_pairs": [
             f"{disc}|{chap}" for disc, chap in sorted(arbiter_silent_pairs)
         ],
-        "partial_panel_count": len(partial_panel_pairs),
         "fallback_count": len(fallback_pairs),
         "final_present_count": len(final_pairs),
         "final_present_pairs": [f"{disc}|{chap}" for disc, chap in sorted(final_pairs)],
         "pair_decisions": pair_rows,
         "verification_runs": _result_audit_rows(verification_results),
-        "tie_break_runs": tie_run_rows,
+        "arbiter_runs": arbiter_run_rows,
     }
     print(
         f"  -> consenso scope: {len(final_pairs)} coppie finali; "
-        f"{len(strong_direct_pairs)} ammesse da evidenza strong; "
-        f"{len(tie_pairs)} contese di cui {len(arbiter_pairs)} decise dall'arbitro "
+        f"{len(pass2_strong_only_pairs)} pass2-only strong inviate all'arbitro; "
+        f"{len(arbiter_pairs)} conflitti/unknown arbitrati "
         f"({len(arbiter_resolved_pairs & final_pairs)} ammesse); "
         f"{len(fallback_pairs)} fail-open"
     )

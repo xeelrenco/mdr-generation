@@ -52,12 +52,10 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
     pass2 = scope.get("pass2") or {}
     set_key("SCOPE_PASS2_ENABLED", pass2.get("enabled", False))
     set_key("SCOPE_PASS2_LLM_MODEL", pass2.get("llm_model", ""))
-    set_key("SCOPE_PASS2_TIEBREAK_LLM_MODEL", pass2.get("tiebreak_llm_model", ""))
     set_key(
-        "SCOPE_PASS2_TIEBREAK_LLM_MODEL_2",
-        pass2.get("tiebreak_llm_model_2", "claude-haiku-4-5"),
+        "SCOPE_PASS2_ARBITER_LLM_MODEL",
+        pass2.get("arbiter_llm_model", "gemini-2.5-pro"),
     )
-    set_key("SCOPE_PASS2_ARBITER_LLM_MODEL", pass2.get("arbiter_llm_model", ""))
     set_key("SCOPE_PASS2_BATCH_SIZE", pass2.get("batch_size", 30))
     set_key("SCOPE_PASS2_WORKERS", pass2.get("workers", 4))
     set_key("SCOPE_PASS2_CHUNK_ENABLED", pass2.get("chunk_enabled", False))

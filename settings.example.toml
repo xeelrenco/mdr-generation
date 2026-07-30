@@ -22,10 +22,8 @@ chunk_repass_min_chars = 200
 
 [scope.pass2]
 enabled = true
-llm_model = "gemini-2.5-pro"
-tiebreak_llm_model = ""  # vuoto = usa scope.pass1.llm_model (1o giudice, voto cieco)
-tiebreak_llm_model_2 = "claude-haiku-4-5"  # 2o giudice, voto cieco
-arbiter_llm_model = ""  # vuoto = stesso modello del pass 2; decide sui disaccordi
+llm_model = "claude-sonnet-4-6"  # verifica catalogo indipendente dal pass 1
+arbiter_llm_model = "gemini-2.5-pro"  # solo sui disaccordi/unknown tra pass 1 e pass 2
 batch_size = 30
 workers = 4
 chunk_enabled = true

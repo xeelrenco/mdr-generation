@@ -44,11 +44,33 @@ def parse_json_response(raw_text: str) -> Any:
     except json.JSONDecodeError as error:
         if error.msg != "Extra data":
             raise
-        # Some providers occasionally append commentary or repeat a JSON object
-        # despite response_mime_type=json. Keep the first complete payload; any
-        # omitted decisions remain unknown and are handled by pipeline guards.
-        value, _end = json.JSONDecoder().raw_decode(cleaned)
-        return value
+        # Some providers split one answer into consecutive JSON objects despite
+        # response_mime_type=json. Parse all complete objects and merge list fields
+        # (for example "decisions") so assigned rows are not silently discarded.
+        decoder = json.JSONDecoder()
+        values: List[Any] = []
+        cursor = 0
+        while cursor < len(cleaned):
+            while cursor < len(cleaned) and cleaned[cursor].isspace():
+                cursor += 1
+            if cursor >= len(cleaned):
+                break
+            value, cursor = decoder.raw_decode(cleaned, cursor)
+            values.append(value)
+        if values and all(isinstance(value, dict) for value in values):
+            merged: Dict[str, Any] = {}
+            for value in values:
+                for key, item in value.items():
+                    if (
+                        key in merged
+                        and isinstance(merged[key], list)
+                        and isinstance(item, list)
+                    ):
+                        merged[key].extend(item)
+                    elif key not in merged:
+                        merged[key] = item
+            return merged
+        return values[0]
 
 
 def safe_excel_value(value: Any) -> Any:

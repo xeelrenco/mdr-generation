@@ -400,11 +400,12 @@ def main() -> int:
                     "catalog_sha256": gap_pass_audit.get("catalog_sha256", ""),
                     "disagreement_count": gap_pass_audit.get("disagreement_count", 0),
                     "fallback_count": gap_pass_audit.get("fallback_count", 0),
-                    "strong_direct_count": gap_pass_audit.get("strong_direct_count", 0),
+                    "pass2_strong_only_count": gap_pass_audit.get(
+                        "pass2_strong_only_count", 0
+                    ),
                     "arbiter_resolved_count": gap_pass_audit.get(
                         "arbiter_resolved_count", 0
                     ),
-                    "judges": gap_pass_audit.get("tiebreak_judges") or [],
                     "arbiter": gap_pass_audit.get("arbiter_model", ""),
                     "comparison": scope_run_comparison,
                     "llm_usage": usage.to_dict(),
@@ -656,10 +657,7 @@ def main() -> int:
         scope_pass2_pairs_final=gap_pass_audit.get("final_present_count", 0),
         scope_pass2_disagreements=gap_pass_audit.get("disagreement_count", 0),
         scope_pass2_fallbacks=gap_pass_audit.get("fallback_count", 0),
-        scope_pass2_tiebreak_model=gap_pass_audit.get("tiebreak_model", ""),
-        scope_pass2_judges=" + ".join(gap_pass_audit.get("tiebreak_judges") or []),
-        scope_pass2_judges_disagree=gap_pass_audit.get("judges_disagree_count", 0),
-        scope_pass2_strong_direct=gap_pass_audit.get("strong_direct_count", 0),
+        scope_pass2_strong_only=gap_pass_audit.get("pass2_strong_only_count", 0),
         scope_pass2_arbiter_model=gap_pass_audit.get("arbiter_model", ""),
         scope_pass2_arbiter_present=gap_pass_audit.get("arbiter_present_count", 0),
         scope_pass2_arbiter_no_verdict=gap_pass_audit.get(

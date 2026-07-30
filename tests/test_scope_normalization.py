@@ -190,12 +190,15 @@ class ScopeNormalizationTests(unittest.TestCase):
         self.assertEqual(len(source_labels), 2)
         self.assertEqual(len(upload_names), 2)
 
-    def test_json_parser_uses_first_complete_payload_when_extra_data_follows(self):
+    def test_json_parser_merges_consecutive_payload_lists(self):
         parsed = parse_json_response(
             '{"decisions": [{"present": false}]}\n'
             '{"decisions": [{"present": true}]}'
         )
-        self.assertEqual(parsed, {"decisions": [{"present": False}]})
+        self.assertEqual(
+            parsed,
+            {"decisions": [{"present": False}, {"present": True}]},
+        )
 
     def test_pass2_malformed_json_becomes_unknown_instead_of_failing(self):
         error = json.JSONDecodeError("Extra data", '{"decisions": []} x', 17)

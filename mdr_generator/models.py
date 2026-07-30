@@ -207,10 +207,7 @@ class PipelineSummary:
     scope_pass2_pairs_final: int = 0
     scope_pass2_disagreements: int = 0
     scope_pass2_fallbacks: int = 0
-    scope_pass2_tiebreak_model: str = ""
-    scope_pass2_judges: str = ""
-    scope_pass2_judges_disagree: int = 0
-    scope_pass2_strong_direct: int = 0
+    scope_pass2_strong_only: int = 0
     scope_pass2_arbiter_model: str = ""
     scope_pass2_arbiter_present: int = 0
     scope_pass2_arbiter_no_verdict: int = 0

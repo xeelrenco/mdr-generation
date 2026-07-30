@@ -165,7 +165,9 @@ class ScopeStabilityTests(unittest.TestCase):
         )
         self.assertEqual(result.decisions, {self.a: True})
         self.assertEqual(result.missing_pairs, [self.b])
-        self.assertTrue(any("positive_without_evidence" in row for row in result.invalid_rows))
+        self.assertTrue(
+            any("positive_without_evidence" in row for row in result.invalid_rows)
+        )
 
     def test_aggregate_marks_incomplete_negative_as_unknown(self):
         result = _result([self.a, self.b], {self.a: False})
@@ -174,7 +176,7 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertIsNone(votes[self.b])
         self.assertEqual(verdicts[self.a], 1)
 
-    def test_only_strong_evidence_admits_without_judges(self):
+    def test_strong_support_helper(self):
         self.assertTrue(
             _has_strong_support([_raw(self.c, "llm_catalog_verification", "strong")])
         )
@@ -215,7 +217,7 @@ class ScopeStabilityTests(unittest.TestCase):
         results = _scan_catalog(
             [Path("scope.pdf")],
             [[self.a]],
-            "gemini-2.5-pro",
+            "claude-sonnet-4-6",
             {},
             tie_break=False,
         )
@@ -228,44 +230,29 @@ class ScopeStabilityTests(unittest.TestCase):
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_agreeing_judges_decide_without_the_arbiter(self, scan, _examples):
+    def test_agreement_admits_without_arbiter(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
-            {self.a: True, self.b: False, self.c: True},
-            confidence="medium",
+            {self.a: True, self.b: True, self.c: False},
         )
-        judge = _result(
-            [self.b, self.c],
-            {self.b: True, self.c: False},
-            tie_break=True,
-        )
-        scan.side_effect = [[verification], [judge], [judge]]
+        scan.side_effect = [[verification]]
 
         final, audit, _ = run_gap_targeted_pass(
             [Path("scope.pdf")],
             object(),
             self.vocab,
             [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
+            model="claude-sonnet-4-6",
         )
         final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
         self.assertEqual(final_pairs, {self.a, self.b})
-        self.assertEqual(audit["disagreement_count"], 2)
-        self.assertEqual(audit["judges_disagree_count"], 0)
+        self.assertEqual(audit["disagreement_count"], 0)
         self.assertEqual(audit["arbiter_resolved_count"], 0)
-        self.assertEqual(audit["fallback_count"], 0)
-        self.assertEqual(scan.call_count, 3)
-        row = next(
-            item
-            for item in audit["pair_decisions"]
-            if (item["discipline_code"], item["chapter_name"]) == self.b
-        )
-        self.assertEqual(row["resolution"], "judges_agree")
-        self.assertEqual(row["arbiter_vote"], "not_needed")
+        self.assertEqual(scan.call_count, 1)
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_arbiter_decides_when_the_judges_disagree(self, scan, _examples):
+    def test_arbiter_decides_pass_disagreement(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
             {self.a: True, self.b: False, self.c: True},
@@ -273,9 +260,7 @@ class ScopeStabilityTests(unittest.TestCase):
         )
         scan.side_effect = [
             [verification],
-            [_result([self.b, self.c], {self.b: True, self.c: True}, tie_break=True)],
             [_result([self.b, self.c], {self.b: True, self.c: False}, tie_break=True)],
-            [_result([self.c], {self.c: False}, tie_break=True)],
         ]
 
         final, audit, _ = run_gap_targeted_pass(
@@ -283,37 +268,33 @@ class ScopeStabilityTests(unittest.TestCase):
             object(),
             self.vocab,
             [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
+            model="claude-sonnet-4-6",
         )
         final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
         self.assertEqual(final_pairs, {self.a, self.b})
-        self.assertEqual(audit["judges_disagree_count"], 1)
-        self.assertEqual(audit["judges_disagree_pairs"], ["ICT|DCS"])
-        self.assertEqual(audit["arbiter_resolved_count"], 1)
-        self.assertEqual(audit["arbiter_present_count"], 0)
+        self.assertEqual(audit["disagreement_count"], 2)
+        self.assertEqual(audit["arbiter_resolved_count"], 2)
+        self.assertEqual(audit["arbiter_present_count"], 1)
+        self.assertEqual(audit["arbiter_present_pairs"], ["ELE|MOTORS"])
         row = next(
             item
             for item in audit["pair_decisions"]
             if (item["discipline_code"], item["chapter_name"]) == self.c
         )
         self.assertEqual(row["resolution"], "arbiter_decided")
-        self.assertEqual(row["judge1_vote"], "present")
-        self.assertEqual(row["judge2_vote"], "absent")
         self.assertEqual(row["arbiter_vote"], "absent")
         self.assertIn("Client responsibility", row["arbiter_reason"])
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_arbiter_can_admit_the_pair_the_judges_split_on(self, scan, _examples):
+    def test_pass2_only_strong_goes_to_arbiter(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
-            {self.a: True, self.b: True, self.c: True},
-            confidence="medium",
+            {self.a: True, self.b: False, self.c: True},
+            confidence="strong",
         )
         scan.side_effect = [
             [verification],
-            [_result([self.c], {self.c: False}, tie_break=True)],
-            [_result([self.c], {self.c: True}, tie_break=True)],
             [_result([self.c], {self.c: True}, tie_break=True)],
         ]
 
@@ -321,17 +302,26 @@ class ScopeStabilityTests(unittest.TestCase):
             [Path("scope.pdf")],
             object(),
             self.vocab,
-            [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
+            [_normalized(self.a)],
+            model="claude-sonnet-4-6",
         )
         final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
-        self.assertEqual(final_pairs, {self.a, self.b, self.c})
-        self.assertEqual(audit["arbiter_present_pairs"], ["ICT|DCS"])
-        self.assertEqual(audit["fallback_count"], 0)
+        self.assertEqual(final_pairs, {self.a, self.c})
+        self.assertEqual(audit["pass2_strong_only_count"], 1)
+        self.assertEqual(audit["pass2_strong_only_pairs"], ["ICT|DCS"])
+        self.assertEqual(audit["disagreement_count"], 1)
+        self.assertEqual(scan.call_count, 2)
+        row = next(
+            item
+            for item in audit["pair_decisions"]
+            if (item["discipline_code"], item["chapter_name"]) == self.c
+        )
+        self.assertTrue(row["pass2_strong_only"])
+        self.assertEqual(row["resolution"], "arbiter_decided")
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_arbiter_receives_every_earlier_argument(self, scan, _examples):
+    def test_arbiter_receives_pass_arguments_only(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
             {self.a: True, self.b: True, self.c: True},
@@ -339,8 +329,6 @@ class ScopeStabilityTests(unittest.TestCase):
         )
         scan.side_effect = [
             [verification],
-            [_result([self.c], {self.c: True}, tie_break=True)],
-            [_result([self.c], {self.c: False}, tie_break=True)],
             [_result([self.c], {self.c: True}, tie_break=True)],
         ]
 
@@ -349,7 +337,7 @@ class ScopeStabilityTests(unittest.TestCase):
             object(),
             self.vocab,
             [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
+            model="claude-sonnet-4-6",
         )
         arbiter_call = scan.call_args_list[-1]
         self.assertTrue(arbiter_call.kwargs["arbiter"])
@@ -357,15 +345,12 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertFalse(context["pass1"]["present"])
         self.assertTrue(context["pass2"]["present"])
         self.assertEqual(context["pass2"]["confidence"], "medium")
-        self.assertTrue(context["judge_a"]["present"])
-        self.assertFalse(context["judge_b"]["present"])
-        self.assertIn("DCS", context["judge_b"]["reason"])
+        self.assertNotIn("judge_a", context)
+        self.assertNotIn("judge_b", context)
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_silent_arbiter_keeps_only_what_the_discovery_pass_found(
-        self, scan, _examples
-    ):
+    def test_silent_arbiter_keeps_only_pass1(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
             {self.a: True, self.b: False, self.c: True},
@@ -373,8 +358,6 @@ class ScopeStabilityTests(unittest.TestCase):
         )
         scan.side_effect = [
             [verification],
-            [_result([self.b, self.c], {self.b: True, self.c: True}, tie_break=True)],
-            [_result([self.b, self.c], {self.b: False, self.c: False}, tie_break=True)],
             [_result([self.b, self.c], {}, tie_break=True)],
         ]
 
@@ -383,13 +366,11 @@ class ScopeStabilityTests(unittest.TestCase):
             object(),
             self.vocab,
             [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
+            model="claude-sonnet-4-6",
         )
         final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
-        # b was quoted by the discovery pass, c only by a non-strong pass 2 hit.
         self.assertEqual(final_pairs, {self.a, self.b})
         self.assertEqual(audit["arbiter_no_verdict_count"], 2)
-        self.assertEqual(audit["arbiter_resolved_count"], 0)
         self.assertEqual(audit["fallback_count"], 1)
         row = next(
             item
@@ -399,7 +380,7 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(row["resolution"], "arbiter_no_verdict")
         self.assertEqual(row["final_decision"], "absent")
 
-    def test_arbiter_prompt_shows_the_verdicts_and_their_arguments(self):
+    def test_arbiter_prompt_shows_pass_verdicts(self):
         prompt = build_arbiter_prompt(
             [
                 (
@@ -413,18 +394,17 @@ class ScopeStabilityTests(unittest.TestCase):
                             "evidence_quote": "DCS configuration is required",
                             "reason": "explicit deliverable",
                         },
-                        "judge_a": {"present": True, "reason": "obligation on page 12"},
-                        "judge_b": {"present": False, "reason": "existing plant only"},
                     },
                 )
             ],
             40,
         )
         self.assertIn("ICT | DCS", prompt)
-        self.assertIn("YOUR earlier run", prompt)
+        self.assertIn("Pass 1 discovery", prompt)
+        self.assertIn("Pass 2 catalog verification", prompt)
+        self.assertNotIn("Judge A", prompt)
+        self.assertNotIn("YOUR earlier run", prompt)
         self.assertIn("DCS configuration is required", prompt)
-        self.assertIn("obligation on page 12", prompt)
-        self.assertIn("existing plant only", prompt)
         self.assertIn("1-40", prompt)
 
     def test_arbiter_prompt_reports_how_many_excerpts_claimed_the_pair(self):
@@ -450,45 +430,19 @@ class ScopeStabilityTests(unittest.TestCase):
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_silent_judge_sends_the_pair_to_the_arbiter(self, scan, _examples):
-        verification = _result(
-            [self.a, self.b, self.c],
-            {self.a: True, self.b: True, self.c: True},
-            confidence="medium",
-        )
+    def test_incomplete_arbiter_is_fail_open_for_pass1(self, scan, _examples):
+        verification = _result([self.a, self.b, self.c], {})
         scan.side_effect = [
             [verification],
-            [_result([self.c], {self.c: True}, tie_break=True)],
-            [_result([self.c], {}, tie_break=True)],
-            [_result([self.c], {self.c: True}, tie_break=True)],
+            [_result([self.a, self.b, self.c], {}, tie_break=True)],
         ]
 
         final, audit, _ = run_gap_targeted_pass(
             [Path("scope.pdf")],
             object(),
             self.vocab,
-            [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
-        )
-        final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
-        self.assertEqual(final_pairs, {self.a, self.b, self.c})
-        self.assertEqual(audit["partial_panel_count"], 1)
-        self.assertEqual(audit["arbiter_resolved_count"], 1)
-        self.assertEqual(audit["fallback_count"], 0)
-
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_incomplete_tie_break_is_fail_open(self, scan, _examples):
-        verification = _result([self.a, self.b, self.c], {})
-        tie = _result([self.a, self.b, self.c], {})
-        scan.side_effect = [[verification], [tie], [tie], [tie]]
-
-        final, audit, _ = run_gap_targeted_pass(
-            [Path("scope.pdf")],
-            object(),
-            self.vocab,
             [_normalized(self.a)],
-            model="gemini-2.5-pro",
+            model="claude-sonnet-4-6",
         )
         final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
         self.assertEqual(final_pairs, {self.a})
@@ -496,60 +450,7 @@ class ScopeStabilityTests(unittest.TestCase):
 
     @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
     @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_strong_pass2_evidence_admits_without_judges(self, scan, _examples):
-        verification = _result(
-            [self.a, self.b, self.c],
-            {self.a: True, self.b: False, self.c: True},
-            confidence="strong",
-        )
-        scan.side_effect = [[verification], []]
-
-        final, audit, _ = run_gap_targeted_pass(
-            [Path("scope.pdf")],
-            object(),
-            self.vocab,
-            [_normalized(self.a)],
-            model="gemini-2.5-pro",
-        )
-        final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
-        self.assertEqual(final_pairs, {self.a, self.c})
-        self.assertEqual(audit["strong_direct_count"], 1)
-        self.assertEqual(audit["strong_direct_pairs"], ["ICT|DCS"])
-        self.assertEqual(audit["disagreement_count"], 0)
-        self.assertEqual(scan.call_count, 1)
-        row = next(
-            item
-            for item in audit["pair_decisions"]
-            if (item["discipline_code"], item["chapter_name"]) == self.c
-        )
-        self.assertEqual(row["resolution"], "pass2_strong_direct")
-
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_non_strong_evidence_goes_to_the_judges(self, scan, _examples):
-        verification = _result(
-            [self.a, self.b, self.c],
-            {self.a: True, self.b: False, self.c: True},
-            confidence="medium",
-        )
-        tie = _result([self.c], {self.c: True}, tie_break=True)
-        scan.side_effect = [[verification], [tie], [tie], [tie]]
-
-        final, audit, _ = run_gap_targeted_pass(
-            [Path("scope.pdf")],
-            object(),
-            self.vocab,
-            [_normalized(self.a)],
-            model="gemini-2.5-pro",
-        )
-        final_pairs = {(row.discipline_code, row.chapter_name) for row in final}
-        self.assertEqual(final_pairs, {self.a, self.c})
-        self.assertEqual(audit["strong_direct_count"], 0)
-        self.assertEqual(audit["disagreement_count"], 1)
-
-    @patch("mdr_generator.gap_targeted_pass._fetch_catalog_pair_examples", return_value={})
-    @patch("mdr_generator.gap_targeted_pass._scan_catalog")
-    def test_two_blind_judges_then_a_gemini_arbiter(self, scan, _examples):
+    def test_sonnet_pass2_and_gemini_arbiter(self, scan, _examples):
         verification = _result(
             [self.a, self.b, self.c],
             {self.a: True, self.b: True, self.c: True},
@@ -557,8 +458,6 @@ class ScopeStabilityTests(unittest.TestCase):
         )
         scan.side_effect = [
             [verification],
-            [_result([self.c], {self.c: True}, tie_break=True)],
-            [_result([self.c], {self.c: False}, tie_break=True)],
             [_result([self.c], {self.c: False}, tie_break=True)],
         ]
 
@@ -567,21 +466,19 @@ class ScopeStabilityTests(unittest.TestCase):
             object(),
             self.vocab,
             [_normalized(self.a), _normalized(self.b)],
-            model="gemini-2.5-pro",
+            model="claude-sonnet-4-6",
         )
         verification_model = scan.call_args_list[0].args[2]
-        judge_models = [call.args[2] for call in scan.call_args_list[1:3]]
-        arbiter_model = scan.call_args_list[3].args[2]
-        self.assertEqual(verification_model, "gemini-2.5-pro")
-        self.assertNotIn(verification_model, judge_models)
-        self.assertEqual(len(set(judge_models)), 2)
-        self.assertEqual(len(audit["tiebreak_judges"]), 2)
+        arbiter_model = scan.call_args_list[1].args[2]
+        self.assertEqual(verification_model, "claude-sonnet-4-6")
         self.assertEqual(arbiter_model, audit["arbiter_model"])
-        self.assertIn("gemini", arbiter_model)
+        self.assertEqual(audit["arbiter_model"], "gemini-2.5-pro")
+        self.assertEqual(audit["mode"], "three_model_consensus")
         self.assertEqual(
-            audit["tiebreak_rule"], "two_blind_judges_then_informed_arbiter"
+            audit["admission_rule"], "pass1_pass2_agreement_else_informed_arbiter"
         )
-        self.assertEqual(audit["tiebreak_scope"], "whole_document")
+        self.assertEqual(audit["arbiter_scope"], "whole_document")
+        self.assertEqual(scan.call_count, 2)
 
     @patch(
         "mdr_generator.gap_targeted_pass.run_parallel",
@@ -593,7 +490,7 @@ class ScopeStabilityTests(unittest.TestCase):
     )
     @patch("mdr_generator.gap_targeted_pass.pdf_page_count", return_value=20)
     @patch("mdr_generator.gap_targeted_pass.read_scope_pdf_bytes", return_value=b"pdf")
-    def test_tie_break_job_covers_the_whole_pdf(self, _read, _count, _ranges, _parallel):
+    def test_arbiter_job_covers_the_whole_pdf(self, _read, _count, _ranges, _parallel):
         seen: list[tuple[int, int]] = []
 
         def fake_job(job, *_args, **_kwargs):
@@ -607,13 +504,13 @@ class ScopeStabilityTests(unittest.TestCase):
             _scan_catalog(
                 [Path("scope.pdf")], [[self.a]], "model", {}, tie_break=True
             )
-            tie_ranges = list(seen)
+            arbiter_ranges = list(seen)
             seen.clear()
             _scan_catalog(
                 [Path("scope.pdf")], [[self.a]], "model", {}, tie_break=False
             )
 
-        self.assertEqual(tie_ranges, [(1, 20)])
+        self.assertEqual(arbiter_ranges, [(1, 20)])
         self.assertEqual(seen, [(1, 10), (9, 20)])
 
     def test_archive_and_compare_scope_runs(self):
