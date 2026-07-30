@@ -26,6 +26,49 @@ from .llm_usage import record_llm_usage
 from .parallel_workers import llm_parallel_workers, pipeline_log, run_parallel
 
 
+def is_transient_llm_error(error: BaseException) -> bool:
+    """Recognize temporary provider failures that should degrade fail-open."""
+    pending: List[BaseException] = [error]
+    seen: Set[int] = set()
+    markers = (
+        "408",
+        "425",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "resource_exhausted",
+        "resource exhausted",
+        "rate limit",
+        "temporarily unavailable",
+        "service unavailable",
+        "connection reset",
+        "connection aborted",
+        "timed out",
+        "timeout",
+    )
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if any(marker in str(current).lower() for marker in markers):
+            return True
+        for nested in (current.__cause__, current.__context__):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+        last_attempt = getattr(current, "last_attempt", None)
+        if last_attempt is not None:
+            try:
+                nested = last_attempt.exception()
+            except Exception:
+                nested = None
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+    return False
+
+
 def _read_pdf_bytes(pdf_path: Path, max_mb: int) -> bytes:
     data = pdf_path.read_bytes()
     size_mb = len(data) / (1024 * 1024)

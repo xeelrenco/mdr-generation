@@ -4,6 +4,7 @@ import importlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mdr_generator.models import NormalizedSignal, PipelineSummary, RaciCandidate
 from mdr_generator.raci_vocabulary import RaciVocabulary
@@ -264,6 +265,172 @@ class ScopeExclusionTests(unittest.TestCase):
         self.assertTrue(audit["discarded_excessive_drop"])
         self.assertIn("cumulative_drop_ratio", audit["guard_reasons"])
         self.assertEqual(len(audit["flagged_documents"]), 1)
+
+    def test_2d_transient_error_is_fail_open_and_audited(self):
+        normalized = [_signal("CIV", "FOUNDATIONS")]
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(exclusions, "_chunk_settings", return_value=(False, 10, 1)),
+                patch.object(exclusions, "read_scope_pdf_bytes", return_value=b"%PDF"),
+                patch.object(exclusions, "pdf_page_count", return_value=2),
+                patch.object(
+                    exclusions,
+                    "call_scope_llm_pdf",
+                    side_effect=RuntimeError("429 RESOURCE_EXHAUSTED"),
+                ),
+            ):
+                kept, found, audit = exclusions.run_scope_exclusion_pass(
+                    [Path("scope.pdf")],
+                    normalized,
+                    Path(tmp),
+                    self.vocab,
+                )
+        self.assertEqual(kept, normalized)
+        self.assertEqual(found, [])
+        self.assertEqual(audit["transient_error_count"], 1)
+        self.assertEqual(audit["pairs_dropped"], 0)
+
+    def test_3e_transient_error_is_fail_open_and_audited(self):
+        candidates = [
+            _candidate("a", "CIV", "FOUNDATIONS"),
+            _candidate("b", "CIV", "FOUNDATIONS"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(basis_gate, "read_scope_pdf_bytes", return_value=b"%PDF"),
+                patch.object(
+                    basis_gate,
+                    "call_scope_llm_pdf",
+                    side_effect=TimeoutError("provider timed out"),
+                ),
+            ):
+                kept, audit = basis_gate.run_sow_basis_gate(
+                    [Path("scope.pdf")],
+                    candidates,
+                    Path(tmp),
+                )
+        self.assertEqual(kept, candidates)
+        self.assertEqual(audit["transient_error_count"], 1)
+        self.assertEqual(audit["documents_dropped"], 0)
+
+    def test_2d_document_mapping_transient_error_is_fail_open(self):
+        candidates = [_candidate("a", "CIV", "FOUNDATIONS")]
+        exclusion = self._parse(
+            self._base(
+                exclude_level="document",
+                discipline_codes=["CIV"],
+            )
+        )[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(exclusions, "read_scope_pdf_bytes", return_value=b"%PDF"),
+                patch.object(
+                    exclusions,
+                    "call_scope_llm_pdf",
+                    side_effect=RuntimeError("503 service unavailable"),
+                ),
+            ):
+                kept, audit = exclusions.apply_document_exclusions(
+                    candidates,
+                    [exclusion],
+                    [Path("scope.pdf")],
+                    Path(tmp),
+                )
+        self.assertEqual(kept, candidates)
+        self.assertEqual(audit["document_transient_error_count"], 1)
+        self.assertEqual(audit["transient_error_count"], 1)
+
+    def test_2d_to_3e_guard_restores_pairs_and_resets_cumulative_count(self):
+        normalized_before = [
+            _signal("ELE", "COMMON"),
+            _signal("CIV", "FOUNDATIONS"),
+        ]
+        candidates_before = [
+            _candidate("e1", "ELE", "COMMON"),
+            _candidate("e2", "ELE", "COMMON"),
+            _candidate("e3", "ELE", "COMMON"),
+            _candidate("c1", "CIV", "FOUNDATIONS"),
+        ]
+        exclusion = self._parse(
+            self._base(
+                exclude_level="discipline",
+                discipline_codes=["ELE"],
+            )
+        )[0]
+        normalized_after, dropped_pairs = exclusions.filter_normalized_by_exclusions(
+            normalized_before, [exclusion]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidates_after, exclusion_audit = exclusions.apply_document_exclusions(
+                candidates_before,
+                [exclusion],
+                [],
+                Path(tmp),
+                pair_audit={
+                    "pairs_before": 2,
+                    "pairs_after": 1,
+                    "pairs_dropped": len(dropped_pairs),
+                    "dropped_pairs": dropped_pairs,
+                },
+            )
+            if exclusion_audit["drop_guard_triggered"]:
+                normalized_after = normalized_before
+
+            with (
+                patch.object(basis_gate, "read_scope_pdf_bytes", return_value=b"%PDF"),
+                patch.object(
+                    basis_gate,
+                    "call_scope_llm_pdf",
+                    return_value={
+                        "unsupported_documents": [
+                            {"title_key": "c1", "reason": "not in SoW"}
+                        ]
+                    },
+                ),
+            ):
+                final_candidates, gate_audit = basis_gate.run_sow_basis_gate(
+                    [Path("scope.pdf")],
+                    candidates_after,
+                    Path(tmp),
+                    initial_candidate_count=len(candidates_before),
+                    already_dropped=len(candidates_before) - len(candidates_after),
+                )
+
+        self.assertTrue(exclusion_audit["drop_guard_triggered"])
+        self.assertEqual(normalized_after, normalized_before)
+        self.assertEqual(candidates_after, candidates_before)
+        self.assertEqual(gate_audit["already_dropped"], 0)
+        self.assertEqual(len(final_candidates), 3)
+
+    def test_3e_disambiguates_pdfs_with_the_same_filename(self):
+        candidates = [
+            _candidate("a", "CIV", "FOUNDATIONS"),
+            _candidate("b", "CIV", "FOUNDATIONS"),
+            _candidate("c", "CIV", "FOUNDATIONS"),
+        ]
+        pdfs = [Path("area_a/scope.pdf"), Path("area_b/scope.pdf")]
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(basis_gate, "read_scope_pdf_bytes", return_value=b"%PDF"),
+                patch.object(
+                    basis_gate,
+                    "call_scope_llm_pdf",
+                    return_value={
+                        "unsupported_documents": [
+                            {"title_key": "a", "reason": "not in SoW"}
+                        ]
+                    },
+                ),
+            ):
+                kept, audit = basis_gate.run_sow_basis_gate(
+                    pdfs,
+                    candidates,
+                    Path(tmp),
+                )
+        self.assertEqual({candidate.title_key for candidate in kept}, {"b", "c"})
+        self.assertEqual(len(set(audit["pdfs"])), 2)
+        self.assertEqual(len(audit["dropped_documents"][0]["pdf_votes"]), 2)
 
     def test_document_mapping_reattaches_pdf_and_retained_context(self):
         candidates = [_candidate("foundation loads", "CIV", "FOUNDATIONS")]

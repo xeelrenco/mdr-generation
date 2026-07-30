@@ -458,7 +458,6 @@ def main() -> int:
             f"{exclusion_audit.get('pairs_after', '?')} "
             f"(-{exclusion_audit.get('pairs_dropped', 0)})"
         )
-
         print("Step 3a: profili documento (Scalable, timeline, esempi storici)...")
         profiles = load_document_effort_profiles(conn)
         save_document_effort_profiles(
@@ -489,6 +488,12 @@ def main() -> int:
                 f"  -> {len(candidates)} candidati "
                 f"(-{exclusion_audit.get('documents_dropped', 0)} esclusi SoW)"
             )
+        if exclusion_audit.get("transient_error_count"):
+            print(
+                "  -> ATTENZIONE: "
+                f"{exclusion_audit['transient_error_count']} chiamate 2d transitorie "
+                "ignorate in fail-open (dettagli nell'audit)"
+            )
 
         print("Step 3e: verifica base SoW per documento (temi non previsti)...")
         candidates, basis_gate_audit = run_sow_basis_gate(
@@ -501,6 +506,12 @@ def main() -> int:
                 len(candidates_before_exclusions) - len(candidates)
             ),
         )
+        if basis_gate_audit.get("transient_error_count"):
+            print(
+                "  -> ATTENZIONE: "
+                f"{basis_gate_audit['transient_error_count']} chiamate 3e transitorie "
+                "ignorate in fail-open (dettagli nell'audit)"
+            )
         save_candidates_csv(candidates, candidates_csv)
         if basis_gate_audit.get("discarded_excessive_drop"):
             print(

@@ -23,6 +23,7 @@ from .scope_pdf import (
     call_scope_llm_pdf,
     chunk_page_ranges,
     extract_scope_pdf_pages,
+    is_transient_llm_error,
     pdf_page_count,
     read_scope_pdf_bytes,
     resolve_scope_llm_config,
@@ -105,33 +106,8 @@ def _strict_pages(value: Any, start: int, end: int) -> List[int]:
 
 
 def _is_transient_quota_error(error: BaseException) -> bool:
-    pending: List[BaseException] = [error]
-    seen: Set[int] = set()
-    while pending:
-        current = pending.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-        text = str(current).lower()
-        if (
-            "429" in text
-            or "resource_exhausted" in text
-            or "resource exhausted" in text
-            or "rate limit" in text
-        ):
-            return True
-        for nested in (current.__cause__, current.__context__):
-            if isinstance(nested, BaseException):
-                pending.append(nested)
-        last_attempt = getattr(current, "last_attempt", None)
-        if last_attempt is not None:
-            try:
-                nested = last_attempt.exception()
-            except Exception:
-                nested = None
-            if isinstance(nested, BaseException):
-                pending.append(nested)
-    return False
+    """Backward-compatible alias for the shared transient-error classifier."""
+    return is_transient_llm_error(error)
 
 
 @dataclass(frozen=True)

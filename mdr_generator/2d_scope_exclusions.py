@@ -9,6 +9,8 @@ Levels (narrowest first):
 
 from __future__ import annotations
 
+import hashlib
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -26,6 +28,7 @@ from .scope_pdf import (
     call_scope_llm_pdf,
     chunk_page_ranges,
     extract_scope_pdf_pages,
+    is_transient_llm_error,
     pdf_page_count,
     read_scope_pdf_bytes,
 )
@@ -34,6 +37,18 @@ from .utils import save_json
 EXCLUDE_LEVELS = ("document", "pair", "chapter", "discipline")
 _DOC_CATALOG_CHUNK = 200
 _MAX_PASS_DROP_RATIO = 0.50
+
+
+def _unique_pdf_labels(pdf_paths: List[Path]) -> Dict[Path, str]:
+    counts = Counter(path.name.casefold() for path in pdf_paths)
+    labels: Dict[Path, str] = {}
+    for path in pdf_paths:
+        if counts[path.name.casefold()] == 1:
+            labels[path] = path.name
+            continue
+        token = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+        labels[path] = f"{path.name}#{token}"
+    return labels
 
 
 @dataclass
@@ -472,6 +487,7 @@ def _run_exclusion_chunk(
     model: Optional[str],
     total_pages: int,
     vocab: RaciVocabulary,
+    source_label: str,
 ) -> Tuple[_ExclChunkJob, List[ScopeExclusion]]:
     prompt = build_scope_exclusion_chunk_prompt(
         vocab, job.page_start, job.page_end, total_pages
@@ -483,10 +499,14 @@ def _run_exclusion_chunk(
         chunk_bytes,
         model=model,
         pass_id="pass1",
-        upload_name=f"{pdf_path.stem}_excl_{job.page_start}_{job.page_end}.pdf",
+        upload_name=(
+            f"{pdf_path.stem}_"
+            f"{hashlib.sha256(source_label.encode('utf-8')).hexdigest()[:8]}_"
+            f"excl_{job.page_start}_{job.page_end}.pdf"
+        ),
         stage="pass2d_scope_exclusions",
     )
-    return job, _parse_exclusions(data, source_pdf=pdf_path.name, vocab=vocab)
+    return job, _parse_exclusions(data, source_pdf=source_label, vocab=vocab)
 
 
 def extract_scope_exclusions_from_pdfs(
@@ -494,9 +514,12 @@ def extract_scope_exclusions_from_pdfs(
     vocab: RaciVocabulary,
     *,
     model: Optional[str] = None,
+    transient_errors: Optional[List[dict]] = None,
 ) -> List[ScopeExclusion]:
     chunk_enabled, chunk_pages, overlap = _chunk_settings()
     all_items: List[ScopeExclusion] = []
+    errors = transient_errors if transient_errors is not None else []
+    labels = _unique_pdf_labels(pdf_paths)
 
     for pdf_path in pdf_paths:
         pdf_bytes = read_scope_pdf_bytes(pdf_path)
@@ -509,9 +532,29 @@ def extract_scope_exclusions_from_pdfs(
             ]
 
             def _runner(job: _ExclChunkJob) -> Tuple[_ExclChunkJob, List[ScopeExclusion]]:
-                return _run_exclusion_chunk(
-                    job, pdf_path, pdf_bytes, model, total_pages, vocab
-                )
+                try:
+                    return _run_exclusion_chunk(
+                        job,
+                        pdf_path,
+                        pdf_bytes,
+                        model,
+                        total_pages,
+                        vocab,
+                        labels[pdf_path],
+                    )
+                except Exception as error:
+                    if not is_transient_llm_error(error):
+                        raise
+                    errors.append(
+                        {
+                            "stage": "scope_exclusion",
+                            "source_pdf": labels[pdf_path],
+                            "page_start": job.page_start,
+                            "page_end": job.page_end,
+                            "error": str(error)[:300],
+                        }
+                    )
+                    return job, []
 
             results = run_parallel(
                 jobs,
@@ -522,16 +565,35 @@ def extract_scope_exclusions_from_pdfs(
                 all_items.extend(items)
         else:
             prompt = build_scope_exclusion_prompt(vocab)
-            data = call_scope_llm_pdf(
-                prompt,
-                pdf_path,
-                pdf_bytes,
-                model=model,
-                pass_id="pass1",
-                stage="pass2d_scope_exclusions",
-            )
+            try:
+                data = call_scope_llm_pdf(
+                    prompt,
+                    pdf_path,
+                    pdf_bytes,
+                    model=model,
+                    pass_id="pass1",
+                    upload_name=(
+                        f"{pdf_path.stem}_"
+                        f"{hashlib.sha256(labels[pdf_path].encode('utf-8')).hexdigest()[:8]}_"
+                        "exclusions.pdf"
+                    ),
+                    stage="pass2d_scope_exclusions",
+                )
+            except Exception as error:
+                if not is_transient_llm_error(error):
+                    raise
+                errors.append(
+                    {
+                        "stage": "scope_exclusion",
+                        "source_pdf": labels[pdf_path],
+                        "page_start": 1,
+                        "page_end": total_pages,
+                        "error": str(error)[:300],
+                    }
+                )
+                continue
             all_items.extend(
-                _parse_exclusions(data, source_pdf=pdf_path.name, vocab=vocab)
+                _parse_exclusions(data, source_pdf=labels[pdf_path], vocab=vocab)
             )
 
     return _dedupe_exclusions(all_items)
@@ -639,15 +701,16 @@ def select_document_title_keys_via_llm(
     valid = {c.title_key for c in candidates}
     selected: Set[str] = set()
     audit_rows: List[dict] = []
-    paths_by_name = {path.name: path for path in pdf_paths}
+    labels = _unique_pdf_labels(pdf_paths)
+    paths_by_label = {label: path for path, label in labels.items()}
     pdf_bytes_by_path = {path: read_scope_pdf_bytes(path) for path in pdf_paths}
 
     jobs: List[Tuple[ScopeExclusion, str, Path]] = []
     for excl in document_exclusions:
         relevant_paths = [
-            paths_by_name[name]
+            paths_by_label[name]
             for name in (excl.source_pdfs or [excl.source_pdf])
-            if name in paths_by_name
+            if name in paths_by_label
         ] or pdf_paths
         for chunk in _catalog_chunks_for_exclusion(candidates, excl):
             for pdf_path in relevant_paths:
@@ -658,26 +721,47 @@ def select_document_title_keys_via_llm(
     ) -> Tuple[ScopeExclusion, Path, Dict[str, Any]]:
         excl, catalog_block, pdf_path = job
         prompt = build_document_exclusion_prompt(excl, catalog_block)
-        data = call_scope_llm_pdf(
-            prompt,
-            pdf_path,
-            pdf_bytes_by_path[pdf_path],
-            model=model,
-            pass_id="pass1",
-            upload_name=(
-                f"{pdf_path.stem}_doc_excl_"
-                f"{abs(hash((excl.label, catalog_block))) % 10_000_000}.pdf"
-            ),
-            stage="pass2d_document_exclusions",
-        )
+        try:
+            data = call_scope_llm_pdf(
+                prompt,
+                pdf_path,
+                pdf_bytes_by_path[pdf_path],
+                model=model,
+                pass_id="pass1",
+                upload_name=(
+                    f"{pdf_path.stem}_doc_excl_"
+                    f"{abs(hash((excl.label, catalog_block))) % 10_000_000}.pdf"
+                ),
+                stage="pass2d_document_exclusions",
+            )
+        except Exception as error:
+            if not is_transient_llm_error(error):
+                raise
+            data = {
+                "excluded_documents": [],
+                "_transient_error": str(error)[:300],
+            }
         return excl, pdf_path, data
 
     if len(jobs) == 1:
         results = [_run_job(jobs[0])]
     else:
-        results = run_parallel(jobs, _run_job, max_workers=llm_parallel_workers())
+        results = run_parallel(
+            jobs,
+            _run_job,
+            max_workers=llm_parallel_workers(),
+        )
 
     for excl, pdf_path, data in results:
+        if data.get("_transient_error"):
+            audit_rows.append(
+                {
+                    "outcome": "transient_error_fail_open",
+                    "exclusion_label": excl.label,
+                    "source_pdf": labels[pdf_path],
+                    "error": data["_transient_error"],
+                }
+            )
         for item in data.get("excluded_documents") or []:
             if not isinstance(item, dict):
                 continue
@@ -688,7 +772,7 @@ def select_document_title_keys_via_llm(
                         "title_key": key,
                         "outcome": "invalid_title_key",
                         "exclusion_label": excl.label,
-                        "source_pdf": pdf_path.name,
+                        "source_pdf": labels[pdf_path],
                         "raw": item,
                     }
                 )
@@ -699,7 +783,7 @@ def select_document_title_keys_via_llm(
                     "title_key": key,
                     "outcome": "excluded",
                     "exclusion_label": excl.label,
-                    "source_pdf": pdf_path.name,
+                    "source_pdf": labels[pdf_path],
                     "reason": item.get("reason") or "",
                 }
             )
@@ -832,7 +916,20 @@ def run_scope_exclusion_pass(
     model: Optional[str] = None,
 ) -> Tuple[List[NormalizedSignal], List[ScopeExclusion], dict]:
     """Always-on: LLM exclusions with level; apply discipline/chapter/pair filters."""
-    exclusions = extract_scope_exclusions_from_pdfs(pdf_paths, vocab, model=model)
+    transient_errors: List[dict] = []
+    exclusions = extract_scope_exclusions_from_pdfs(
+        pdf_paths,
+        vocab,
+        model=model,
+        transient_errors=transient_errors,
+    )
+    transient_errors.sort(
+        key=lambda row: (
+            str(row.get("source_pdf") or ""),
+            int(row.get("page_start") or 0),
+            int(row.get("page_end") or 0),
+        )
+    )
     filtered, dropped_pairs = filter_normalized_by_exclusions(normalized, exclusions)
     active = [e for e in exclusions if e.should_exclude()]
     by_status: Dict[str, int] = {}
@@ -859,6 +956,9 @@ def run_scope_exclusion_pass(
         "dropped_pairs": dropped_pairs,
         "dropped_documents": [],
         "document_llm_audit": [],
+        "transient_error_count": len(transient_errors),
+        "transient_errors": transient_errors,
+        "parallel_workers": llm_parallel_workers(),
     }
     save_json(json_dir / "scope_exclusion_audit.json", audit)
     return filtered, exclusions, audit
@@ -901,6 +1001,13 @@ def apply_document_exclusions(
         round(len(flagged_docs) / len(candidates), 4) if candidates else 0.0
     )
     audit["document_llm_audit"] = llm_audit
+    document_errors = [
+        row for row in llm_audit if row.get("outcome") == "transient_error_fail_open"
+    ]
+    audit["document_transient_error_count"] = len(document_errors)
+    audit["transient_error_count"] = int(audit.get("transient_error_count", 0)) + len(
+        document_errors
+    )
     active_doc_exclusions = [
         exclusion
         for exclusion in exclusions
