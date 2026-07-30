@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -91,13 +92,17 @@ def _resolve_source_pages(
     """
     extra: List[str] = []
     if raw.chunk_page_start is None or raw.chunk_page_end is None:
-        return list(raw.source_pages), None, extra
+        pages = sorted({page for page in raw.source_pages if page >= 1})
+        if not pages:
+            return pages, "source_pages_missing", extra
+        return pages, None, extra
 
     start, end = raw.chunk_page_start, raw.chunk_page_end
-    pages = list(raw.source_pages)
-    strict = raw.extraction_method == "llm_pdf_chunk_repass"
+    pages = sorted({page for page in raw.source_pages if page >= 1})
+    strict = raw.extraction_method.startswith("llm_pdf_chunk_repass")
+    inside = [page for page in pages if start <= page <= end]
 
-    if pages and any(start <= p <= end for p in pages):
+    if pages and len(inside) == len(pages):
         return pages, None, extra
 
     if not pair_valid:
@@ -120,6 +125,10 @@ def _resolve_source_pages(
             extra,
         )
 
+    if inside:
+        extra.append("pages_filtered_to_chunk")
+        return inside, None, extra
+
     extra.append("pages_corrected_to_chunk")
     return [start], None, extra
 
@@ -130,7 +139,14 @@ def _merge_into_normalized(
     source_pages: List[int],
 ) -> None:
     """Union pages and evidence when Step 1 emits multiple signals for the same pair."""
+    _ensure_provenance(existing)
     existing.source_pages = sorted(set(existing.source_pages) | set(source_pages))
+    if raw.source_pdf:
+        existing.source_pdfs = sorted(set(existing.source_pdfs) | {raw.source_pdf})
+        existing.source_pages_by_pdf[raw.source_pdf] = sorted(
+            set(existing.source_pages_by_pdf.get(raw.source_pdf, []))
+            | set(source_pages)
+        )
     if raw.confidence and _CONFIDENCE_RANK.get(raw.confidence, 0) > _CONFIDENCE_RANK.get(
         existing.confidence, 0
     ):
@@ -153,9 +169,18 @@ def _merge_normalized_signals(
     incoming: NormalizedSignal,
 ) -> None:
     """Union pages/evidence when the same pair is added from another pass (e.g. gap 2c)."""
+    _ensure_provenance(existing)
+    _ensure_provenance(incoming)
     existing.source_pages = sorted(
         set(existing.source_pages) | set(incoming.source_pages)
     )
+    existing.source_pdfs = sorted(
+        set(existing.source_pdfs) | set(incoming.source_pdfs)
+    )
+    for source_pdf, pages in incoming.source_pages_by_pdf.items():
+        existing.source_pages_by_pdf[source_pdf] = sorted(
+            set(existing.source_pages_by_pdf.get(source_pdf, [])) | set(pages)
+        )
     if _CONFIDENCE_RANK.get(incoming.confidence, 0) > _CONFIDENCE_RANK.get(
         existing.confidence, 0
     ):
@@ -175,6 +200,18 @@ def _merge_normalized_signals(
         )
 
 
+def _ensure_provenance(signal: NormalizedSignal) -> None:
+    if signal.source_pdf and signal.source_pdf not in signal.source_pdfs:
+        signal.source_pdfs.append(signal.source_pdf)
+    signal.source_pdfs = sorted(set(signal.source_pdfs))
+    if signal.source_pdf and signal.source_pdf not in signal.source_pages_by_pdf:
+        signal.source_pages_by_pdf[signal.source_pdf] = list(signal.source_pages)
+    signal.source_pages_by_pdf = {
+        source_pdf: sorted(set(pages))
+        for source_pdf, pages in sorted(signal.source_pages_by_pdf.items())
+    }
+
+
 def consolidate_normalized_signals(
     signals: List[NormalizedSignal],
 ) -> List[NormalizedSignal]:
@@ -192,11 +229,21 @@ def consolidate_normalized_signals(
         ),
     ):
         key = (sig.discipline_code, sig.chapter_name or "")
+        clone = replace(
+            sig,
+            source_pages=list(sig.source_pages),
+            source_pdfs=list(sig.source_pdfs),
+            source_pages_by_pdf={
+                source_pdf: list(pages)
+                for source_pdf, pages in sig.source_pages_by_pdf.items()
+            },
+        )
+        _ensure_provenance(clone)
         if key in index:
-            _merge_normalized_signals(out[index[key]], sig)
+            _merge_normalized_signals(out[index[key]], clone)
         else:
             index[key] = len(out)
-            out.append(sig)
+            out.append(clone)
     return out
 
 
@@ -305,6 +352,10 @@ def normalize_signals(
                 source_pages=source_pages,
                 notes=raw.evidence_quote or raw.notes,
                 source_pdf=raw.source_pdf,
+                source_pdfs=[raw.source_pdf] if raw.source_pdf else [],
+                source_pages_by_pdf=(
+                    {raw.source_pdf: list(source_pages)} if raw.source_pdf else {}
+                ),
                 use_chapter_filter=True,
             )
         )

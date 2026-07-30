@@ -28,13 +28,13 @@ def collect_pair_evidence(
     normalized: List[NormalizedSignal],
 ) -> List[PairEvidenceSnippet]:
     snippets: List[PairEvidenceSnippet] = []
-    seen_quotes: Set[str] = set()
+    seen_quotes: Set[Tuple[str, str]] = set()
 
     for raw in raw_signals:
         if _pair_key(raw.discipline_code, raw.chapter_name or "") != pair:
             continue
         quote = (raw.evidence_quote or raw.notes or "").strip()
-        dedupe_key = quote.lower()
+        dedupe_key = (raw.source_pdf, quote.lower())
         if quote and dedupe_key in seen_quotes:
             continue
         if quote:
@@ -56,20 +56,24 @@ def collect_pair_evidence(
         if _pair_key(norm.discipline_code, norm.chapter_name or "") != pair:
             continue
         quote = (norm.notes or norm.scope_section or "").strip()
-        dedupe_key = quote.lower()
-        if quote and dedupe_key in seen_quotes:
-            continue
-        if quote:
-            seen_quotes.add(dedupe_key)
-        snippets.append(
-            PairEvidenceSnippet(
-                source_pdf=norm.source_pdf,
-                scope_section=norm.scope_section,
-                evidence_quote=quote,
-                source_pages=list(norm.source_pages),
-                origin="normalized",
-            )
+        pages_by_pdf = norm.source_pages_by_pdf or (
+            {norm.source_pdf: list(norm.source_pages)} if norm.source_pdf else {}
         )
+        for source_pdf, pages in sorted(pages_by_pdf.items()):
+            dedupe_key = (source_pdf, quote.lower())
+            if quote and dedupe_key in seen_quotes:
+                continue
+            if quote:
+                seen_quotes.add(dedupe_key)
+            snippets.append(
+                PairEvidenceSnippet(
+                    source_pdf=source_pdf,
+                    scope_section=norm.scope_section,
+                    evidence_quote=quote,
+                    source_pages=list(pages),
+                    origin="normalized",
+                )
+            )
 
     return snippets
 

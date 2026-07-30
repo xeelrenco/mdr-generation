@@ -384,6 +384,10 @@ def _raw_to_normalized(raw: RawScopeSignal) -> Optional[NormalizedSignal]:
         source_pages=pages,
         notes=raw.evidence_quote or raw.notes,
         source_pdf=raw.source_pdf,
+        source_pdfs=[raw.source_pdf] if raw.source_pdf else [],
+        source_pages_by_pdf=(
+            {raw.source_pdf: list(pages)} if raw.source_pdf else {}
+        ),
         use_chapter_filter=True,
     )
 

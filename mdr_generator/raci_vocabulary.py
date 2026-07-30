@@ -332,52 +332,6 @@ def build_scope_pdf_chunk_prompt(
     )
 
 
-def build_pair_recovery_prompt(
-    vocab: RaciVocabulary,
-    candidate_pairs: List[Tuple[str, str]],
-    scope_section: str,
-    rejected_discipline: str,
-    rejected_chapter: str,
-    validation_error: str,
-    evidence_quote: str,
-    source_pages: List[int],
-    page_start: int,
-    page_end: int,
-    total_pages: int,
-) -> str:
-    pairs_block = "\n".join(f"- {disc} | {chap}" for disc, chap in sorted(candidate_pairs))
-    pages_str = ", ".join(str(p) for p in source_pages) if source_pages else "—"
-    return f"""You analyze a Scope of Work (SoW) PDF excerpt where a previous scope-pair proposal failed catalog validation.
-
-TASK: Re-read the attached PDF excerpt and choose ONE replacement pair from the allowed list below,
-or return null fields if no pair is clearly supported by the SoW text in this excerpt.
-
-REJECTED PROPOSAL (do not repeat unless it appears in the allowed list and is correct):
-- scope_section: {scope_section}
-- discipline_code: {rejected_discipline}
-- chapter_name: {rejected_chapter}
-- source_pages (previous): {pages_str}
-- evidence_quote: {evidence_quote[:250]}
-
-VALIDATION ERROR:
-{validation_error}
-
-ALLOWED REPLACEMENT PAIRS — choose EXACTLY one row or return nulls:
-{pairs_block}
-
-RULES:
-- Read the PDF excerpt (global pages {page_start}–{page_end} of {total_pages}).
-- Pick the pair that best matches the SoW obligation described above.
-- Use ONLY pairs from the allowed list — copy discipline_code and chapter_name exactly.
-- source_pages MUST be integers between {page_start} and {page_end}.
-- If the SoW text does not justify any allowed pair, return discipline_code and chapter_name as null.
-- Do not guess generic pairs without explicit evidence in the excerpt.
-
-Respond with JSON only:
-{{"discipline_code": "...", "chapter_name": "...", "confidence": "strong|medium|weak", "source_pages": [...], "evidence_quote": "...", "recovery_reason": "..."}}
-"""
-
-
 def build_gap_targeted_pass_prompt(
     candidate_pairs: List[Tuple[str, str]],
     page_start: int,

@@ -252,7 +252,7 @@ def write_qa_report(
         [
             "Provider LLM Scope",
             summary.scope_llm_provider or "—",
-            "Pass 1 — estrazione + pair recovery",
+            "Pass 1 — estrazione scope",
         ],
         [
             "Modello LLM Scope",
@@ -582,7 +582,16 @@ def write_qa_report(
                 pair_doc_counts.get(pair, 0),
                 "Sì" if in_renco else ("No" if in_renco is False else "—"),
                 renco_n if renco_n is not None else "—",
-                ",".join(str(p) for p in n.source_pages),
+                (
+                    "; ".join(
+                        f"{source_pdf}: {','.join(str(page) for page in pages)}"
+                        for source_pdf, pages in sorted(
+                            n.source_pages_by_pdf.items()
+                        )
+                    )
+                    if n.source_pages_by_pdf
+                    else ",".join(str(p) for p in n.source_pages)
+                ),
                 (n.notes or "")[:300],
             ]
         )
@@ -612,19 +621,18 @@ def write_qa_report(
                 u.raw_discipline,
                 u.raw_chapter,
                 _reason_it(u.reason),
-                u.recovery_outcome or "—",
                 u.source_pdf,
             ]
             for u in uncertain
         ]
     else:
-        excl_rows = [["—", "—", "—", "Nessun segnale escluso in questa run", "—", "—"]]
+        excl_rows = [["—", "—", "—", "Nessun segnale escluso in questa run", "—"]]
     _write_table(
         ws,
         1,
-        ["Sezione SoW", "Disciplina LLM", "Capitolo LLM", "Motivo", "Recovery LLM", "PDF"],
+        ["Sezione SoW", "Disciplina LLM", "Capitolo LLM", "Motivo", "PDF"],
         excl_rows,
-        [24, 12, 28, 36, 14, 28],
+        [24, 12, 28, 36, 28],
     )
 
     # --- Foglio 2b: Scope_consenso (Step 2c) ---

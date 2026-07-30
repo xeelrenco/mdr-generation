@@ -38,6 +38,8 @@ class NormalizedSignal:
     source_pages: List[int] = field(default_factory=list)
     notes: str = ""
     source_pdf: str = ""
+    source_pdfs: List[str] = field(default_factory=list)
+    source_pages_by_pdf: Dict[str, List[int]] = field(default_factory=dict)
     use_chapter_filter: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -56,8 +58,6 @@ class UncertainMapping:
     chunk_page_start: Optional[int] = None
     chunk_page_end: Optional[int] = None
     confidence: str = "medium"
-    recovery_attempted: bool = False
-    recovery_outcome: str = ""  # skipped | failed | no_pair | recovered
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

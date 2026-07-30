@@ -66,7 +66,6 @@ consolidate_normalized_signals = _im(
     "mdr_generator.2_normalize"
 ).consolidate_normalized_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
-recover_rejected_pairs = _im("mdr_generator.pair_recovery").recover_rejected_pairs
 run_gap_targeted_pass = _im("mdr_generator.gap_targeted_pass").run_gap_targeted_pass
 run_scope_exclusion_pass = _im(
     "mdr_generator.2d_scope_exclusions"
@@ -336,28 +335,6 @@ def main() -> int:
             vocab.canonical_pairs,
         )
         print(f"  -> {len(normalized)} segnali validi, {len(uncertain)} incerti")
-
-        print("Step 2b: recovery coppie scartate via LLM...")
-        existing_pairs = {
-            (n.discipline_code, n.chapter_name or "") for n in normalized
-        }
-        recovered, uncertain, recovery_audit, recovered_raw = recover_rejected_pairs(
-            scope_pdfs,
-            uncertain,
-            vocab,
-            existing_pairs,
-            model=args.scope_llm_model,
-        )
-        if recovered:
-            normalized.extend(recovered)
-            raw_signals.extend(recovered_raw)
-        save_json(json_dir / "scope_pair_recovery_audit.json", recovery_audit)
-        n_ok = sum(1 for a in recovery_audit if a.get("outcome") == "recovered")
-        n_dup = sum(1 for a in recovery_audit if a.get("outcome") == "duplicate")
-        print(
-            f"  -> {n_ok} coppie recuperate, {n_dup} duplicate,"
-            f" {len(uncertain)} ancora esclusi"
-        )
 
         if pass2_enabled:
             print(

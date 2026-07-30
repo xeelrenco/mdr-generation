@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -24,6 +26,19 @@ from .raci_vocabulary import (
 from .utils import extract_json_payload, parse_json_response, save_json
 from .llm_usage import record_llm_usage
 from .parallel_workers import llm_parallel_workers, pipeline_log, run_parallel
+
+
+def unique_pdf_labels(pdf_paths: List[Path]) -> Dict[Path, str]:
+    """Return stable labels, disambiguating equal basenames across directories."""
+    counts = Counter(path.name.casefold() for path in pdf_paths)
+    labels: Dict[Path, str] = {}
+    for path in pdf_paths:
+        if counts[path.name.casefold()] == 1:
+            labels[path] = path.name
+            continue
+        token = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+        labels[path] = f"{path.name}#{token}"
+    return labels
 
 
 def is_transient_llm_error(error: BaseException) -> bool:
@@ -144,8 +159,18 @@ def _parse_llm_signals(
         if conf not in ("strong", "medium", "weak"):
             conf = "medium"
 
-        pages_raw = item.get("source_pages") or []
-        pages = [int(p) for p in pages_raw if str(p).isdigit()]
+        pages_raw = item.get("source_pages")
+        pages = (
+            sorted(
+                {
+                    int(page)
+                    for page in pages_raw
+                    if not isinstance(page, bool) and str(page).isdigit()
+                }
+            )
+            if isinstance(pages_raw, list)
+            else []
+        )
 
         key = (disc_code, chapter_name)
         if key in seen:
@@ -638,12 +663,17 @@ def _extract_scope_single_call(
     vocab: RaciVocabulary,
     provider: str,
     model: Optional[str] = None,
+    source_label: Optional[str] = None,
 ) -> List[RawScopeSignal]:
     prompt = build_scope_pdf_prompt(vocab)
     data = _invoke_llm_pdf(
         prompt, pdf_path, pdf_bytes, provider, model=model, stage="pass1_scope"
     )
-    return _parse_llm_signals(data, source_pdf=pdf_path.name, extraction_method="llm_pdf")
+    return _parse_llm_signals(
+        data,
+        source_pdf=source_label or pdf_path.name,
+        extraction_method="llm_pdf",
+    )
 
 
 @dataclass
@@ -661,6 +691,7 @@ def _run_chunk_primary_pass(
     provider: str,
     model: Optional[str],
     total_pages: int,
+    source_label: str,
 ) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
     chunk_bytes = _extract_pdf_page_range(pdf_bytes, job.page_start, job.page_end)
     prompt = build_scope_pdf_chunk_prompt(vocab, job.page_start, job.page_end, total_pages)
@@ -676,12 +707,17 @@ def _run_chunk_primary_pass(
     )
     chunk_signals = _parse_llm_signals(
         data,
-        source_pdf=pdf_path.name,
+        source_pdf=source_label,
         extraction_method="llm_pdf_chunk",
         chunk_page_start=job.page_start,
         chunk_page_end=job.page_end,
     )
-    return job, chunk_signals
+    return job, _sanitize_chunk_signal_pages(
+        chunk_signals,
+        job.page_start,
+        job.page_end,
+        strict=False,
+    )
 
 
 def _run_chunk_repass(
@@ -692,6 +728,7 @@ def _run_chunk_repass(
     provider: str,
     model: Optional[str],
     total_pages: int,
+    source_label: str,
 ) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
     chunk_bytes = _extract_pdf_page_range(pdf_bytes, job.page_start, job.page_end)
     repass_prompt = build_scope_pdf_chunk_repass_prompt(
@@ -709,12 +746,43 @@ def _run_chunk_repass(
     )
     repass_signals = _parse_llm_signals(
         repass_data,
-        source_pdf=pdf_path.name,
+        source_pdf=source_label,
         extraction_method="llm_pdf_chunk_repass",
         chunk_page_start=job.page_start,
         chunk_page_end=job.page_end,
     )
-    return job, repass_signals
+    return job, _sanitize_chunk_signal_pages(
+        repass_signals,
+        job.page_start,
+        job.page_end,
+        strict=True,
+    )
+
+
+def _sanitize_chunk_signal_pages(
+    signals: List[RawScopeSignal],
+    page_start: int,
+    page_end: int,
+    *,
+    strict: bool,
+) -> List[RawScopeSignal]:
+    """Validate each occurrence before different chunks are merged."""
+    valid: List[RawScopeSignal] = []
+    for signal in signals:
+        original = list(signal.source_pages)
+        inside = sorted({page for page in original if page_start <= page <= page_end})
+        if inside:
+            signal.source_pages = inside
+            if inside != original:
+                signal.extraction_method += "+pages_filtered_to_chunk"
+            valid.append(signal)
+            continue
+        if strict:
+            continue
+        signal.source_pages = [page_start]
+        signal.extraction_method += "+pages_corrected_to_chunk"
+        valid.append(signal)
+    return valid
 
 
 def _merge_chunk_signals(
@@ -724,6 +792,7 @@ def _merge_chunk_signals(
     out_index: Optional[Dict[tuple[str, str], int]] = None,
 ) -> None:
     index = out_index if out_index is not None else {}
+    confidence_rank = {"strong": 3, "medium": 2, "weak": 1}
     for sig in signals:
         key = (sig.discipline_code, sig.chapter_name or "")
         if key in seen:
@@ -732,6 +801,10 @@ def _merge_chunk_signals(
                 existing.source_pages = sorted(
                     set(existing.source_pages) | set(sig.source_pages)
                 )
+                if confidence_rank.get(sig.confidence, 0) > confidence_rank.get(
+                    existing.confidence, 0
+                ):
+                    existing.confidence = sig.confidence
                 extra = (sig.evidence_quote or sig.notes or "").strip()
                 if extra and extra not in (existing.evidence_quote or ""):
                     combined = f"{existing.evidence_quote} | {extra}"
@@ -743,6 +816,13 @@ def _merge_chunk_signals(
                         if existing.scope_section
                         else section
                     )[:200]
+                if (
+                    existing.chunk_page_start != sig.chunk_page_start
+                    or existing.chunk_page_end != sig.chunk_page_end
+                ):
+                    existing.chunk_page_start = None
+                    existing.chunk_page_end = None
+                    existing.extraction_method = "llm_pdf_chunk_merged"
             continue
         seen.add(key)
         index[key] = len(out)
@@ -755,8 +835,10 @@ def _extract_scope_chunked(
     vocab: RaciVocabulary,
     provider: str,
     model: Optional[str] = None,
+    source_label: Optional[str] = None,
 ) -> Tuple[List[RawScopeSignal], Dict[str, Any]]:
     total_pages = _pdf_page_count(pdf_bytes)
+    resolved_source_label = source_label or pdf_path.name
     chunk_pages = max(1, cfg_int("SCOPE_PASS1_CHUNK_PAGES", 10))
     overlap = max(0, cfg_int("SCOPE_PASS1_CHUNK_OVERLAP", 1))
     repass_enabled = cfg_bool("SCOPE_PASS1_CHUNK_REPASS_ENABLED", default=True)
@@ -793,7 +875,14 @@ def _extract_scope_chunked(
 
     def _primary_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
         return _run_chunk_primary_pass(
-            job, pdf_path, pdf_bytes, vocab, provider, model, total_pages
+            job,
+            pdf_path,
+            pdf_bytes,
+            vocab,
+            provider,
+            model,
+            total_pages,
+            resolved_source_label,
         )
 
     primary_results = run_parallel(
@@ -831,7 +920,14 @@ def _extract_scope_chunked(
     if repass_jobs:
         def _repass_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
             return _run_chunk_repass(
-                job, pdf_path, pdf_bytes, vocab, provider, model, total_pages
+                job,
+                pdf_path,
+                pdf_bytes,
+                vocab,
+                provider,
+                model,
+                total_pages,
+                resolved_source_label,
             )
 
         repass_results = run_parallel(
@@ -888,6 +984,7 @@ def extract_scope_from_pdf(
     pdf_path: Path,
     vocab: RaciVocabulary,
     model: Optional[str] = None,
+    source_label: Optional[str] = None,
 ) -> Tuple[List[RawScopeSignal], Optional[Dict[str, Any]]]:
     provider, resolved_model = resolve_scope_llm_config("pass1", cli_model=model)
     max_mb = cfg_int("SCOPE_MAX_PDF_MB", 32)
@@ -895,11 +992,21 @@ def extract_scope_from_pdf(
 
     if cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False):
         return _extract_scope_chunked(
-            pdf_path, pdf_bytes, vocab, provider, model=resolved_model
+            pdf_path,
+            pdf_bytes,
+            vocab,
+            provider,
+            model=resolved_model,
+            source_label=source_label,
         )
 
     signals = _extract_scope_single_call(
-        pdf_path, pdf_bytes, vocab, provider, model=resolved_model
+        pdf_path,
+        pdf_bytes,
+        vocab,
+        provider,
+        model=resolved_model,
+        source_label=source_label,
     )
     return signals, None
 
@@ -914,15 +1021,19 @@ def extract_all_scope_pdfs(
     all_signals: List[RawScopeSignal] = []
     chunking_enabled = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
     all_chunk_runs: List[Dict[str, Any]] = []
+    labels = unique_pdf_labels(pdf_paths)
 
     for pdf_path in pdf_paths:
         print(f"  LLM analisi PDF: {pdf_path.name}")
         signals, chunk_meta = extract_scope_from_pdf(
-            pdf_path, vocab, model=resolved_model
+            pdf_path,
+            vocab,
+            model=resolved_model,
+            source_label=labels[pdf_path],
         )
         all_signals.extend(signals)
         if chunk_meta:
-            chunk_meta["source_pdf"] = pdf_path.name
+            chunk_meta["source_pdf"] = labels[pdf_path]
             all_chunk_runs.append(chunk_meta)
 
     payload: Dict[str, Any] = {

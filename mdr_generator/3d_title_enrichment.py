@@ -12,7 +12,7 @@ from .mdr_title import is_list_like_title
 from .pair_scope_context import build_pair_sow_context_chunks
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_title_enrichment_prompt
-from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes
+from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes, unique_pdf_labels
 from .title_enrichment_examples import (
     load_title_enrichment_examples,
     select_examples_for_pair,
@@ -402,8 +402,9 @@ def run_title_enrichment_pass(
         grouped.setdefault(key, []).append(dec)
 
     pdf_bytes_by_name: Dict[str, bytes] = {}
+    pdf_labels = unique_pdf_labels(scope_pdfs)
     for pdf_path in scope_pdfs:
-        pdf_bytes_by_name[pdf_path.name] = read_scope_pdf_bytes(pdf_path)
+        pdf_bytes_by_name[pdf_labels[pdf_path]] = read_scope_pdf_bytes(pdf_path)
 
     decision_map = {d.title_key: d for d in decisions}
     jobs: List[_EnrichmentPairJob] = []
