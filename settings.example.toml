@@ -65,6 +65,15 @@ max_examples = 24
 # [llm_pricing.gpt_5_5]
 # input_per_1m = 5.00
 # output_per_1m = 30.00
+# [llm_pricing.gpt_5_6_sol]
+# input_per_1m = 5.00
+# output_per_1m = 30.00
 # [llm_pricing.gemini_2_5_pro]
 # input_per_1m = 1.25
 # output_per_1m = 5.00
+# [llm_pricing.claude_sonnet_4_6]
+# input_per_1m = 3.00
+# output_per_1m = 15.00
+# [llm_pricing.claude_opus_4_8]
+# input_per_1m = 5.00
+# output_per_1m = 25.00

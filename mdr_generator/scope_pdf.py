@@ -429,7 +429,10 @@ def _call_gemini_pdf(
 def _claude_supports_custom_temperature(model: str) -> bool:
     """Opus 4.7+ non accetta più temperature esplicita."""
     m = model.lower()
-    return "opus-4-7" not in m and "opus-4.7" not in m
+    return not any(
+        marker in m
+        for marker in ("opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8")
+    )
 
 
 def _is_anthropic_rate_limit_error(ex: BaseException) -> bool:

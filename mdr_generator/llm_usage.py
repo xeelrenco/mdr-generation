@@ -77,6 +77,8 @@ _DEFAULT_PRICE_PER_1M: Dict[Tuple[str, str], float] = {
     ("gemini-2.5-flash", "output"): 0.30,
     ("claude-sonnet-4-6", "input"): 3.00,
     ("claude-sonnet-4-6", "output"): 15.00,
+    ("claude-opus-4-8", "input"): 5.00,
+    ("claude-opus-4-8", "output"): 25.00,
     ("claude-haiku-4-5", "input"): 0.80,
     ("claude-haiku-4-5", "output"): 4.00,
 }
