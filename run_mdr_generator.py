@@ -493,7 +493,6 @@ def main() -> int:
                 f"{basis_gate_audit['transient_error_count']} chiamate Step 7 transitorie "
                 "ignorate in fail-open (dettagli nell'audit)"
             )
-        save_candidates_csv(candidates, candidates_csv)
         if basis_gate_audit.get("discarded_excessive_drop"):
             print(
                 "  -> risultato scartato: "
@@ -510,6 +509,7 @@ def main() -> int:
         ranked = apply_historical_ranking(conn, candidates)
         with_hist = sum(1 for c in ranked if c.historical_count > 0)
         print(f"  -> {with_hist} con storico, {len(ranked) - with_hist} senza")
+        save_candidates_csv(ranked, candidates_csv)
 
         discipline_short_codes = load_discipline_short_codes(conn)
 
