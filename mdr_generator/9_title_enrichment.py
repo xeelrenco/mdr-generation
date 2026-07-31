@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -13,6 +14,7 @@ from .pair_scope_context import build_pair_sow_context_chunks
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_title_enrichment_prompt
 from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes, unique_pdf_labels
+from .scope_run_history import load_previous_title_elements
 from .title_enrichment_examples import (
     load_title_enrichment_examples,
     select_examples_for_pair,
@@ -20,6 +22,41 @@ from .title_enrichment_examples import (
 from .utils import save_json
 
 _CONFIDENCE_RANK = {"strong": 3, "medium": 2, "weak": 1, "": 0}
+
+# P4: suffissi a livello impianto/unità (es. "New Steam Generation Unit") non
+# discriminano le istanze. Nessuna whitelist per-progetto: si riconosce la coda
+# generica, e qualsiasi cifra (tag attrezzatura, P-7515/B, GT2, Unit 2) salva il
+# titolo perché è già un discriminante.
+_GENERIC_TAIL_RE = re.compile(
+    r"\b(unit|units|plant|plants|project|projects|package|packages|facility|"
+    r"facilities|complex|site|sites|area|areas|system|systems|works|scope)\b"
+    r"[\s.]*$",
+    re.IGNORECASE,
+)
+_DISCRIMINATOR_RE = re.compile(r"\d")
+
+
+def _extra_generic_re() -> Optional[re.Pattern]:
+    raw = cfg("TITLE_ENRICHMENT_GENERIC_PATTERNS", "").strip()
+    if not raw:
+        return None
+    try:
+        return re.compile(raw, re.IGNORECASE)
+    except re.error:
+        return None
+
+
+def is_generic_sow_title(title: str) -> bool:
+    """True per suffissi SoW che non discriminano (livello impianto/unità)."""
+    text = (title or "").strip()
+    if not text:
+        return True
+    if _DISCRIMINATOR_RE.search(text):
+        return False
+    if _GENERIC_TAIL_RE.search(text):
+        return True
+    extra = _extra_generic_re()
+    return bool(extra and extra.search(text))
 
 
 def _pick_single_element(elements: List[dict]) -> Optional[dict]:
@@ -99,6 +136,8 @@ def _apply_elements_to_decision(
         "title_key": dec.title_key,
         "elements_raw": len(elements),
         "count_before": dec.instance_count,
+        # Persistito per ancorare la run successiva (stabilità suffissi SoW).
+        "sow_elements": elements,
     }
     if not elements or not split_rows:
         audit["outcome"] = "no_elements"
@@ -122,6 +161,22 @@ def _apply_elements_to_decision(
         qa_flags.append("non_scalable_no_split")
         audit["non_scalable_no_split"] = True
 
+    # P4: hard solo quando si sta per splittare — un suffisso generico ripetuto
+    # su N righe non discrimina nulla. Sulle righe singole resta un warning.
+    if len(working) > 1 and cfg_bool("TITLE_ENRICHMENT_GENERIC_FILTER", default=True):
+        kept = [el for el in working if not is_generic_sow_title(el["sow_specific_title"])]
+        dropped = len(working) - len(kept)
+        if dropped:
+            audit["generic_dropped"] = dropped
+            if kept:
+                working = kept
+                qa_flags.append("sow_generic_elements_dropped")
+            else:
+                picked = _pick_single_element(working)
+                working = [picked] if picked else []
+                qa_flags.append("sow_all_elements_generic")
+                audit["generic_all"] = True
+
     if not working:
         audit["outcome"] = "collapsed_empty"
         audit["count_after"] = count_before
@@ -133,6 +188,43 @@ def _apply_elements_to_decision(
 
     if new_count == 1:
         el = working[0]
+        # P4 soft: su riga singola un suffisso generico è comunque meglio di
+        # niente — si segnala in QA senza scartarlo.
+        if is_generic_sow_title(el["sow_specific_title"]):
+            qa_flags.append("sow_title_generic")
+            audit["generic_soft"] = True
+        # P2: un solo sow_element non deve collassare un doc scalable che lo
+        # Step 9 aveva già dimensionato a N istanze. Si arricchisce il titolo
+        # ma si conserva instance_count, replicando lo stesso suffisso SoW su
+        # tutte le istanze (marcate shared per disambiguare in Step 11).
+        if dec.scalable and count_before > 1:
+            prior = {inst.index: inst for inst in dec.instances}
+            instances = [
+                DocumentInstanceSpec(
+                    index=i,
+                    label=prior[i].label if i in prior else "",
+                    sow_specific_title=el["sow_specific_title"],
+                    sow_title_confidence=el.get("confidence", ""),
+                    sow_title_evidence=el.get("evidence_quote", ""),
+                    sow_title_shared=True,
+                )
+                for i in range(1, count_before + 1)
+            ]
+            qa_flags.append("sow_single_element_kept_count")
+            updated = replace(
+                dec,
+                instance_count=count_before,
+                instances=instances,
+                qa_flags=qa_flags,
+                selection_reason=(
+                    f"{dec.selection_reason}; "
+                    f"10: 1 SoW element su {count_before} istanze (count 9 conservato)"
+                ),
+            )
+            audit["outcome"] = "single_element_kept_count"
+            audit["count_after"] = count_before
+            return updated, audit
+
         inst = DocumentInstanceSpec(
             index=1,
             label=el.get("label", ""),
@@ -361,6 +453,20 @@ def _baseline_row_count(decisions: List[DocumentScopeDecision]) -> int:
     return sum(max(d.instance_count, 0) for d in decisions if d.in_scope)
 
 
+def _load_reusable_elements(
+    runs_dir: Optional[Path],
+    project: str,
+) -> Tuple[Dict[str, List[dict]], Optional[str]]:
+    if not cfg_bool("TITLE_ENRICHMENT_REUSE_PREVIOUS", default=True):
+        return {}, None
+    if not runs_dir or not project:
+        return {}, None
+    try:
+        return load_previous_title_elements(runs_dir, project)
+    except Exception:
+        return {}, None
+
+
 def run_title_enrichment_pass(
     scope_pdfs: List[Path],
     raw_signals: List[RawScopeSignal],
@@ -368,6 +474,8 @@ def run_title_enrichment_pass(
     decisions: List[DocumentScopeDecision],
     json_dir: Path,
     model: Optional[str] = None,
+    runs_dir: Optional[Path] = None,
+    project: str = "",
 ) -> Tuple[List[DocumentScopeDecision], dict]:
     split_rows = cfg_bool("TITLE_ENRICHMENT_SPLIT_ROWS", default=True)
     max_elements = cfg_int("TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC", 15)
@@ -391,24 +499,57 @@ def run_title_enrichment_pass(
         save_json(json_dir / "title_enrichment_audit.json", summary)
         return decisions, summary
 
+    decision_map = {d.title_key: d for d in decisions}
+
+    # P1 stabilità: a parità di title_key riusa i sow_elements della run
+    # precedente; l'LLM gira solo sui title_key nuovi/mancanti.
+    previous_elements, previous_run = _load_reusable_elements(runs_dir, project)
+    reuse_rows: List[dict] = []
+    reused_keys: Set[str] = set()
+    for dec in in_scope:
+        elements = previous_elements.get(dec.title_key)
+        if elements is None:
+            continue
+        new_dec, row = _apply_elements_to_decision(
+            dec, elements, split_rows=split_rows
+        )
+        decision_map[dec.title_key] = new_dec
+        row["source"] = "previous_run"
+        reuse_rows.append(row)
+        reused_keys.add(dec.title_key)
+
     pair_signals: Set[Tuple[str, str]] = {
         _pair_key(sig) for sig in normalized if sig.chapter_name
     }
     grouped: Dict[Tuple[str, str], List[DocumentScopeDecision]] = {}
     for dec in in_scope:
+        if dec.title_key in reused_keys:
+            continue
         key = (dec.discipline_code, dec.chapter_name)
         if key not in pair_signals:
             continue
         grouped.setdefault(key, []).append(dec)
 
     pdf_bytes_by_name: Dict[str, bytes] = {}
-    pdf_labels = unique_pdf_labels(scope_pdfs)
-    for pdf_path in scope_pdfs:
-        pdf_bytes_by_name[pdf_labels[pdf_path]] = read_scope_pdf_bytes(pdf_path)
+    if grouped:
+        pdf_labels = unique_pdf_labels(scope_pdfs)
+        for pdf_path in scope_pdfs:
+            pdf_bytes_by_name[pdf_labels[pdf_path]] = read_scope_pdf_bytes(pdf_path)
 
-    decision_map = {d.title_key: d for d in decisions}
     jobs: List[_EnrichmentPairJob] = []
     audit_pairs: List[dict] = []
+    if reuse_rows:
+        audit_pairs.append(
+            {
+                "discipline_code": "",
+                "chapter_name": "",
+                "source": "previous_run",
+                "previous_run": previous_run,
+                "document_count": len(reuse_rows),
+                "outcome": "reused",
+                "documents": reuse_rows,
+            }
+        )
 
     for pair, pair_decisions in sorted(grouped.items()):
         context_chunks, context_meta = build_pair_sow_context_chunks(
@@ -501,6 +642,10 @@ def run_title_enrichment_pass(
         "final_rows": final_rows,
         "extra_rows": max(0, final_rows - baseline_rows),
         "docs_with_sow": docs_with_sow,
+        "docs_reused_previous": len(reuse_rows),
+        "docs_llm": sum(len(job.decisions) for job in jobs),
+        "reuse_previous_run": previous_run,
+        "reuse_enabled": cfg_bool("TITLE_ENRICHMENT_REUSE_PREVIOUS", default=True),
         "pairs_llm": pairs_llm,
         "llm_calls_total": llm_calls,
         "llm_parallel_workers": llm_parallel_workers(),

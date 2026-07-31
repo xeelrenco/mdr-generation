@@ -66,14 +66,24 @@ def format_mdr_display_title(
     sow_specific_title: Optional[str] = None,
     *,
     separator: str = TITLE_SEPARATOR,
+    disambiguate_shared: bool = False,
 ) -> str:
-    """Col B: RACI | suffix — SoW-specific part (3d) or instance label/count (3b)."""
+    """
+    Col B: RACI | suffix — SoW-specific part (3d) or instance label/count (3b).
+
+    disambiguate_shared=True quando lo stesso sow_specific_title è replicato su
+    più istanze: si aggiunge il suffisso istanza (label o indice) per evitare
+    che il dedupe per titolo identico elimini le righe.
+    """
     specific = (sow_specific_title or "").strip()
     if specific:
         base = (raci_title or "").strip()
-        if not base:
-            return specific
-        return f"{base}{separator}{specific}"
+        combined = f"{base}{separator}{specific}" if base else specific
+        if disambiguate_shared:
+            return format_mdr_title(
+                combined, instance_index, instance_label, separator=separator
+            )
+        return combined
     return format_mdr_title(
         raci_title, instance_index, instance_label, separator=separator
     )

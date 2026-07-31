@@ -9,3 +9,5 @@ input/*
 !input/Master Document Register Template.xlsx
 credentials/
 .cursor/rules/
+.agents/
+skills-lock.json

@@ -182,6 +182,7 @@ def write_qa_report(
     exclusion_audit: Optional[dict] = None,
     basis_gate_audit: Optional[dict] = None,
     consensus_audit: Optional[dict] = None,
+    sow_mandatory_audit: Optional[dict] = None,
 ) -> Path:
     wb = Workbook()
     wb.remove(wb.active)
@@ -209,6 +210,12 @@ def write_qa_report(
             "Scope",
             "",
             "Coppie disciplina+capitolo estratte dal PDF e quanti documenti RACI generano.",
+        ),
+        (
+            "Obbligatori_SoW",
+            "",
+            "Deliverable che lo SoW obbliga esplicitamente a consegnare, con clausola e "
+            "citazione. I mancanti sono un warning da verificare, non un errore.",
         ),
         (
             "Esclusi",
@@ -1022,6 +1029,100 @@ def write_qa_report(
         else:
             ws.cell(row=row, column=1, value="(nessun gap — overlap completo)")
             row += 2
+
+    # --- Foglio 7: Obbligatori_SoW (canale indipendente, warning-only) ---
+    ws = wb.create_sheet("Obbligatori_SoW")
+    row = 1
+    if not sow_mandatory_audit or not sow_mandatory_audit.get("enabled"):
+        ws.cell(
+            row=1,
+            column=1,
+            value="Estrazione documenti obbligatori disabilitata "
+            "([sow_mandatory] enabled = false).",
+        )
+    else:
+        row = _write_section_title(ws, row, "Riepilogo documenti obbligatori nello SoW")
+        missing_count = sow_mandatory_audit.get("documents_missing", 0)
+        summary_rows = [
+            [
+                "Documenti obbligatori estratti",
+                sow_mandatory_audit.get("documents_total", 0),
+                "Deliverable con obbligo esplicito nello SoW (clausola + citazione).",
+            ],
+            [
+                "Presenti nell'MDR",
+                sow_mandatory_audit.get("documents_in_mdr", 0),
+                "Mappati su un titolo RACI effettivamente generato.",
+            ],
+            [
+                "Mancanti dall'MDR",
+                missing_count,
+                "WARNING: obbligo nello SoW ma nessuna riga generata. "
+                "Non blocca la pipeline — richiede verifica manuale.",
+            ],
+            [
+                "Non mappati sul catalogo",
+                sow_mandatory_audit.get("documents_unmapped", 0),
+                f"Sotto la soglia di match "
+                f"({sow_mandatory_audit.get('min_match_score', '?')}): "
+                "nome SoW non riconducibile a un titolo RACI.",
+            ],
+            [
+                "PDF riusati da run precedente",
+                sow_mandatory_audit.get("pdfs_reused_previous", 0),
+                str(sow_mandatory_audit.get("reuse_previous_run") or "—"),
+            ],
+            [
+                "Errori LLM (fail-open)",
+                len(sow_mandatory_audit.get("llm_errors") or []),
+                "PDF non analizzati: l'assenza di obbligatori non è conclusiva.",
+            ],
+        ]
+        row = _write_table(
+            ws, row, ["Metrica", "Valore", "Nota"], summary_rows, [34, 10, 62]
+        )
+
+        documents = sow_mandatory_audit.get("documents") or []
+        for section, status in (
+            ("Obbligatori MANCANTI dall'MDR (warning)", "missing_from_mdr"),
+            ("Obbligatori non mappati sul catalogo RACI", "unmapped"),
+            ("Obbligatori presenti nell'MDR", "in_mdr"),
+        ):
+            rows = [
+                [
+                    doc.get("document_name", ""),
+                    doc.get("clause", ""),
+                    doc.get("matched_raci_title", ""),
+                    doc.get("match_score", ""),
+                    doc.get("confidence", ""),
+                    doc.get("source_pdf", ""),
+                    ", ".join(str(p) for p in doc.get("source_pages") or []),
+                    doc.get("evidence_quote", ""),
+                ]
+                for doc in documents
+                if isinstance(doc, dict) and doc.get("match_status") == status
+            ]
+            row = _write_section_title(ws, row, section)
+            if rows:
+                row = _write_table(
+                    ws,
+                    row,
+                    [
+                        "Documento (nome SoW)",
+                        "Clausola",
+                        "Titolo RACI mappato",
+                        "Score",
+                        "Confidenza",
+                        "PDF",
+                        "Pagine",
+                        "Citazione (evidence)",
+                    ],
+                    rows,
+                    [40, 14, 40, 8, 12, 24, 12, 60],
+                )
+            else:
+                ws.cell(row=row, column=1, value="(nessuna riga)")
+                row += 2
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)

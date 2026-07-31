@@ -104,6 +104,39 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
         ),
     )
     set_key("TITLE_ENRICHMENT_MAX_EXAMPLES", title_enrichment.get("max_examples", 10))
+    set_key(
+        "TITLE_ENRICHMENT_REUSE_PREVIOUS",
+        title_enrichment.get("reuse_previous_run", True),
+    )
+    set_key(
+        "TITLE_ENRICHMENT_GENERIC_FILTER",
+        title_enrichment.get("generic_filter", True),
+    )
+    generic_patterns = title_enrichment.get("generic_patterns") or []
+    if isinstance(generic_patterns, list):
+        set_key(
+            "TITLE_ENRICHMENT_GENERIC_PATTERNS",
+            "|".join(str(p).strip() for p in generic_patterns if str(p).strip()),
+        )
+    else:
+        set_key("TITLE_ENRICHMENT_GENERIC_PATTERNS", generic_patterns)
+
+    sow_mandatory = data.get("sow_mandatory") or {}
+    set_key("SOW_MANDATORY_ENABLED", sow_mandatory.get("enabled", True))
+    set_key(
+        "SOW_MANDATORY_MIN_MATCH_SCORE",
+        sow_mandatory.get("min_match_score", 0.6),
+    )
+    set_key(
+        "SOW_MANDATORY_REUSE_PREVIOUS",
+        sow_mandatory.get("reuse_previous_run", True),
+    )
+    # Warning-only per default: i documenti obbligatori mancanti non fermano la run.
+    set_key(
+        "SOW_MANDATORY_FAIL_ON_MISSING",
+        sow_mandatory.get("fail_on_missing", False),
+    )
+    set_key("SOW_MANDATORY_LLM_MODEL", sow_mandatory.get("llm_model", ""))
 
     llm_pricing = data.get("llm_pricing") or {}
     if isinstance(llm_pricing, dict):

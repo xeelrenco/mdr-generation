@@ -91,6 +91,10 @@ class DocumentInstanceSpec:
     sow_specific_title: str = ""
     sow_title_confidence: str = ""
     sow_title_evidence: str = ""
+    # True quando lo stesso sow_specific_title è replicato su più istanze
+    # (1 solo sow_element su doc scalable con count>1): il display deve
+    # disambiguare con label/indice per non far collassare le righe.
+    sow_title_shared: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

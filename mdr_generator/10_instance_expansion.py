@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Dict, List, Set, Tuple
 
 from .mdr_title import format_mdr_display_title
@@ -20,6 +21,22 @@ def _instance_specs(dec: DocumentScopeDecision) -> List[DocumentInstanceSpec]:
         return [DocumentInstanceSpec(index=1, label="")]
     if dec.instances and len(dec.instances) == dec.instance_count:
         return dec.instances
+    if dec.instances:
+        # Mismatch count/instances: non buttare via i titoli SoW già estratti.
+        # Si riusa l'ultimo spec disponibile, marcandolo shared così il display
+        # disambigua con label/indice e il dedupe non elimina righe.
+        padded = len(dec.instances) < dec.instance_count
+        return [
+            replace(
+                dec.instances[min(i, len(dec.instances)) - 1],
+                index=i,
+                sow_title_shared=(
+                    dec.instances[min(i, len(dec.instances)) - 1].sow_title_shared
+                    or padded
+                ),
+            )
+            for i in range(1, dec.instance_count + 1)
+        ]
     return [
         DocumentInstanceSpec(index=i, label="")
         for i in range(1, dec.instance_count + 1)
@@ -56,6 +73,7 @@ def expand_scope_to_line_items(
                 inst_idx,
                 spec.label,
                 spec.sow_specific_title,
+                disambiguate_shared=spec.sow_title_shared,
             )
 
             dedupe_key = f"{dec.title_key}\0{mdr_title.strip().lower()}"

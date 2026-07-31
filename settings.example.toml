@@ -60,6 +60,18 @@ min_confidence = "medium"
 llm_model = ""  # vuoto = usa scope.pass1.llm_model
 examples_path = "input/title_enrichment_examples.json"
 max_examples = 24
+reuse_previous_run = true  # riusa i sow_elements della run precedente sui title_key comuni
+generic_filter = true  # scarta suffissi generici (livello impianto/unita) quando si splitta
+generic_patterns = []  # regex extra opzionali; le cifre/tag salvano sempre il titolo
+
+[sow_mandatory]
+# Canale indipendente dallo scope consensus: deliverable che lo SoW obbliga
+# esplicitamente a consegnare. Solo audit + foglio QA, non blocca la pipeline.
+enabled = true
+min_match_score = 0.6  # copertura minima dei token del nome documento sul titolo RACI
+reuse_previous_run = true
+fail_on_missing = false  # true = solo warning piu' marcato in QA, mai exit 1
+llm_model = ""  # vuoto = usa scope.pass1.llm_model
 
 # Opzionale: override tariffe stima costi LLM (USD per 1M token)
 # [llm_pricing.gpt_5_5]

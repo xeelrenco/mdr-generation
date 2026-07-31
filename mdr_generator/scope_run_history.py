@@ -50,6 +50,47 @@ def _latest_previous_run(runs_dir: Path, project: str) -> Optional[Path]:
     return candidates[-1] if candidates else None
 
 
+def _collect_title_elements(audit: Dict[str, Any]) -> Dict[str, list]:
+    """Extract title_key -> sow_elements[] from a title_enrichment_audit.json."""
+    out: Dict[str, list] = {}
+    for pair in audit.get("pairs") or []:
+        if not isinstance(pair, dict):
+            continue
+        for row in pair.get("documents") or []:
+            if not isinstance(row, dict):
+                continue
+            elements = row.get("sow_elements")
+            if not isinstance(elements, list):
+                continue
+            key = str(row.get("title_key") or "").strip().lower()
+            if key:
+                out[key] = elements
+    return out
+
+
+def load_previous_title_elements(
+    runs_dir: Path,
+    project: str,
+) -> tuple[Dict[str, list], Optional[str]]:
+    """
+    Return (title_key -> sow_elements[], previous_run_name) from the latest
+    archived run. Empty when no usable audit exists — never raises.
+    """
+    previous_dir = _latest_previous_run(runs_dir, project)
+    if previous_dir is None:
+        return {}, None
+    audit_path = previous_dir / "json" / "title_enrichment_audit.json"
+    if not audit_path.exists():
+        return {}, previous_dir.name
+    try:
+        data = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, previous_dir.name
+    if not isinstance(data, dict):
+        return {}, previous_dir.name
+    return _collect_title_elements(data), previous_dir.name
+
+
 def compare_with_previous_run(
     current_gap_audit: Dict[str, Any],
     runs_dir: Path,

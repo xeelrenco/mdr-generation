@@ -56,6 +56,7 @@ from mdr_generator.scope_run_history import (
     compare_with_previous_run,
     save_scope_comparison,
 )
+from mdr_generator.sow_mandatory import run_sow_mandatory_pass
 from mdr_generator.sow_paths import print_sow_files, resolve_scope_pdfs
 from mdr_generator.utils import format_elapsed_seconds, resolve_json_output_dir, save_json
 
@@ -302,6 +303,7 @@ def main() -> int:
     line_items = []
     scope_decisions = []
     title_enrichment_audit: dict = {"enabled": False}
+    sow_mandatory_audit: dict = {"enabled": False}
     dup_removed = 0
     duration_populated = 0
     manhours_populated = 0
@@ -540,6 +542,8 @@ def main() -> int:
                 scope_decisions,
                 json_dir,
                 model=title_model,
+                runs_dir=output_dir / "runs",
+                project=project,
             )
             in_scope = [d for d in scope_decisions if d.in_scope]
             print(
@@ -549,6 +553,13 @@ def main() -> int:
                 f"{title_enrichment_audit.get('final_rows', '?')} "
                 f"(+{title_enrichment_audit.get('extra_rows', 0)} split)"
             )
+            reused = title_enrichment_audit.get("docs_reused_previous", 0)
+            if reused:
+                print(
+                    f"  -> {reused} doc con suffisso SoW riusato da "
+                    f"{title_enrichment_audit.get('reuse_previous_run', '?')} "
+                    f"({title_enrichment_audit.get('docs_llm', 0)} via LLM)"
+                )
         else:
             save_json(
                 json_dir / "title_enrichment_audit.json",
@@ -561,6 +572,31 @@ def main() -> int:
         print("Step 11: espansione istanze MDR...")
         line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
+
+        # Canale indipendente dallo scope consensus: mai bloccante.
+        print("Step 11b: documenti obbligatori dichiarati nello SoW (audit)...")
+        sow_mandatory_audit = run_sow_mandatory_pass(
+            scope_pdfs,
+            ranked,
+            line_items,
+            json_dir,
+            model=cfg("SOW_MANDATORY_LLM_MODEL") or args.scope_llm_model,
+            runs_dir=output_dir / "runs",
+            project=project,
+        )
+        if sow_mandatory_audit.get("enabled"):
+            missing = sow_mandatory_audit.get("documents_missing", 0)
+            print(
+                f"  -> {sow_mandatory_audit.get('documents_total', 0)} obbligatori; "
+                f"{sow_mandatory_audit.get('documents_in_mdr', 0)} nell'MDR, "
+                f"{missing} mancanti, "
+                f"{sow_mandatory_audit.get('documents_unmapped', 0)} non mappati"
+            )
+            if missing:
+                print(
+                    f"  ATTENZIONE: {missing} documenti obbligatori nello SoW non "
+                    "sono nell'MDR (foglio QA 'Obbligatori_SoW'). Run non interrotta."
+                )
 
         if schedule_enabled:
             print(
@@ -719,6 +755,7 @@ def main() -> int:
         exclusion_audit=exclusion_audit,
         basis_gate_audit=basis_gate_audit,
         consensus_audit=gap_pass_audit,
+        sow_mandatory_audit=sow_mandatory_audit,
     )
     archived_json = archive_json_run(json_dir, output_dir, project, ts)
     print(f"Step 15: report qualità -> {report_path}")

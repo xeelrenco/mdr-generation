@@ -301,6 +301,16 @@ def _openai_supports_custom_temperature(model: str) -> bool:
     return not m.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+# Stage che devono essere il più riproducibili possibile: catalogo (pass3) e
+# titoli SoW (pass10, stabilità suffissi tra run). Best-effort: i provider che
+# non accettano temperature custom restano al default.
+_DETERMINISTIC_STAGE_PREFIXES = ("pass3_catalog_", "pass10_")
+
+
+def stage_temperature(stage: str) -> float:
+    return 0.0 if (stage or "").startswith(_DETERMINISTIC_STAGE_PREFIXES) else 0.1
+
+
 def _record_openai_usage(response: Any, model: str, stage: str, call_type: str) -> None:
     usage = getattr(response, "usage", None)
     if not usage:
@@ -378,9 +388,7 @@ def _call_openai_pdf(
         "response_format": {"type": "json_object"},
     }
     if _openai_supports_custom_temperature(model):
-        create_kwargs["temperature"] = (
-            0.0 if stage.startswith("pass3_catalog_") else 0.1
-        )
+        create_kwargs["temperature"] = stage_temperature(stage)
     response = client.chat.completions.create(**create_kwargs)
     _record_openai_usage(response, model, stage, "pdf")
     return parse_json_response(response.choices[0].message.content or "{}")
@@ -418,7 +426,7 @@ def _call_gemini_pdf(
             ],
         ),
         config=types.GenerateContentConfig(
-            temperature=0.0 if stage.startswith("pass3_catalog_") else 0.1,
+            temperature=stage_temperature(stage),
             response_mime_type="application/json",
         ),
     )
@@ -485,9 +493,7 @@ def _call_claude_pdf(
         "messages": [{"role": "user", "content": content}],
     }
     if _claude_supports_custom_temperature(model):
-        create_kwargs["temperature"] = (
-            0.0 if stage.startswith("pass3_catalog_") else 0.1
-        )
+        create_kwargs["temperature"] = stage_temperature(stage)
     max_retries = 5
     base_wait = 60
     message = None
@@ -572,7 +578,7 @@ def _call_openai_text(
         "response_format": {"type": "json_object"},
     }
     if _openai_supports_custom_temperature(model):
-        create_kwargs["temperature"] = 0.1
+        create_kwargs["temperature"] = stage_temperature(stage)
     response = client.chat.completions.create(**create_kwargs)
     _record_openai_usage(response, model, stage, "text")
     return parse_json_response(response.choices[0].message.content or "{}")
@@ -600,7 +606,7 @@ def _call_gemini_text(
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
-            temperature=0.1,
+            temperature=stage_temperature(stage),
             response_mime_type="application/json",
         ),
     )
@@ -627,7 +633,7 @@ def _call_claude_text(
         "messages": [{"role": "user", "content": prompt}],
     }
     if _claude_supports_custom_temperature(model):
-        create_kwargs["temperature"] = 0.1
+        create_kwargs["temperature"] = stage_temperature(stage)
     message = client.messages.create(**create_kwargs)
     _record_claude_usage(message, model, stage, "text")
     raw_text = _extract_anthropic_text(message)
