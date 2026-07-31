@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from .config import PROJECT_DIR, cfg
 
@@ -62,6 +63,47 @@ def resolve_scope_pdfs(explicit_paths: Optional[Sequence[str]] = None) -> List[P
             f"oppure passa --scope-pdf esplicitamente."
         )
     return pdfs
+
+
+def file_sha256(path: Path) -> str:
+    """
+    sha256 del contenuto del file. Un file illeggibile diventa
+    "unreadable:<nome>": non coincide con nessun hash valido, quindi blocca ogni
+    riuso invece di farlo passare per errore.
+    """
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return f"unreadable:{path.name}"
+
+
+def sow_content_hashes(
+    paths: Sequence[Path],
+    labels: Optional[Dict[Path, str]] = None,
+) -> Dict[str, str]:
+    """
+    sha256 del CONTENUTO di ogni PDF, per nome file (o per label se fornito).
+
+    Lega qualsiasi riuso tra run al testo effettivo dello SoW: se il cliente
+    carica un PDF diverso, anche con lo stesso nome, l'hash cambia e il riuso
+    decade. Passare `labels` quando le chiavi devono combaciare con quelle usate
+    negli audit (basename duplicati vengono disambiguati).
+    """
+    return {
+        (labels[path] if labels else path.name): file_sha256(path) for path in paths
+    }
+
+
+def sow_fingerprint(
+    paths: Sequence[Path],
+    labels: Optional[Dict[Path, str]] = None,
+) -> str:
+    """Impronta unica dell'intero set di SoW (nomi + contenuti, ordine stabile)."""
+    hashes = sow_content_hashes(paths, labels)
+    if not hashes:
+        return ""
+    joined = "\n".join(f"{name}:{digest}" for name, digest in sorted(hashes.items()))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def print_sow_files(paths: List[Path]) -> None:

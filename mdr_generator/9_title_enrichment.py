@@ -15,6 +15,7 @@ from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_title_enrichment_prompt
 from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes, unique_pdf_labels
 from .scope_run_history import load_previous_title_elements
+from .sow_paths import sow_fingerprint
 from .title_enrichment_examples import (
     load_title_enrichment_examples,
     select_examples_for_pair,
@@ -456,15 +457,35 @@ def _baseline_row_count(decisions: List[DocumentScopeDecision]) -> int:
 def _load_reusable_elements(
     runs_dir: Optional[Path],
     project: str,
-) -> Tuple[Dict[str, List[dict]], Optional[str]]:
-    if not cfg_bool("TITLE_ENRICHMENT_REUSE_PREVIOUS", default=True):
-        return {}, None
+    sow_fingerprint_current: str,
+) -> Tuple[Dict[str, List[dict]], Optional[str], str]:
+    """
+    Riusa i suffissi SoW della run precedente SOLO se lo SoW e' identico.
+
+    La pipeline gira su documenti che cambiano a ogni commessa: riusare i titoli
+    di una run fatta su un altro PDF produrrebbe un MDR che descrive uno SoW che
+    non esiste piu'. L'impronta del contenuto e' il gate; se non combacia (o
+    manca) si rifa' tutto con l'LLM. Ritorna anche il motivo, per l'audit.
+    """
+    if not cfg_bool("TITLE_ENRICHMENT_REUSE_PREVIOUS", default=False):
+        return {}, None, "disabled_by_config"
     if not runs_dir or not project:
-        return {}, None
+        return {}, None, "no_runs_dir_or_project"
+    if not sow_fingerprint_current:
+        return {}, None, "no_sow_fingerprint"
     try:
-        return load_previous_title_elements(runs_dir, project)
+        elements, previous_run, previous_fingerprint = load_previous_title_elements(
+            runs_dir, project
+        )
     except Exception:
-        return {}, None
+        return {}, None, "previous_run_unreadable"
+    if previous_run is None:
+        return {}, None, "no_previous_run"
+    if not previous_fingerprint:
+        return {}, previous_run, "previous_run_without_fingerprint"
+    if previous_fingerprint != sow_fingerprint_current:
+        return {}, previous_run, "sow_changed"
+    return elements, previous_run, "sow_unchanged"
 
 
 def run_title_enrichment_pass(
@@ -484,10 +505,12 @@ def run_title_enrichment_pass(
 
     in_scope = [d for d in decisions if d.in_scope and d.instance_count >= 1]
     baseline_rows = _baseline_row_count(decisions)
+    sow_fingerprint_current = sow_fingerprint(scope_pdfs)
 
     if not scope_pdfs or not in_scope:
         summary = {
             "enabled": True,
+            "sow_fingerprint": sow_fingerprint_current,
             "split_rows": split_rows,
             "baseline_rows": baseline_rows,
             "final_rows": baseline_rows,
@@ -503,7 +526,9 @@ def run_title_enrichment_pass(
 
     # P1 stabilità: a parità di title_key riusa i sow_elements della run
     # precedente; l'LLM gira solo sui title_key nuovi/mancanti.
-    previous_elements, previous_run = _load_reusable_elements(runs_dir, project)
+    previous_elements, previous_run, reuse_reason = _load_reusable_elements(
+        runs_dir, project, sow_fingerprint_current
+    )
     reuse_rows: List[dict] = []
     reused_keys: Set[str] = set()
     for dec in in_scope:
@@ -645,7 +670,9 @@ def run_title_enrichment_pass(
         "docs_reused_previous": len(reuse_rows),
         "docs_llm": sum(len(job.decisions) for job in jobs),
         "reuse_previous_run": previous_run,
-        "reuse_enabled": cfg_bool("TITLE_ENRICHMENT_REUSE_PREVIOUS", default=True),
+        "reuse_enabled": cfg_bool("TITLE_ENRICHMENT_REUSE_PREVIOUS", default=False),
+        "reuse_reason": reuse_reason,
+        "sow_fingerprint": sow_fingerprint_current,
         "pairs_llm": pairs_llm,
         "llm_calls_total": llm_calls,
         "llm_parallel_workers": llm_parallel_workers(),

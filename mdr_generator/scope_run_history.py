@@ -71,24 +71,26 @@ def _collect_title_elements(audit: Dict[str, Any]) -> Dict[str, list]:
 def load_previous_title_elements(
     runs_dir: Path,
     project: str,
-) -> tuple[Dict[str, list], Optional[str]]:
+) -> tuple[Dict[str, list], Optional[str], str]:
     """
-    Return (title_key -> sow_elements[], previous_run_name) from the latest
-    archived run. Empty when no usable audit exists — never raises.
+    Return (title_key -> sow_elements[], previous_run_name, sow_fingerprint)
+    from the latest archived run. Empty when no usable audit exists — never
+    raises. The fingerprint lets the caller refuse reuse when the SoW changed.
     """
     previous_dir = _latest_previous_run(runs_dir, project)
     if previous_dir is None:
-        return {}, None
+        return {}, None, ""
     audit_path = previous_dir / "json" / "title_enrichment_audit.json"
     if not audit_path.exists():
-        return {}, previous_dir.name
+        return {}, previous_dir.name, ""
     try:
         data = json.loads(audit_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}, previous_dir.name
+        return {}, previous_dir.name, ""
     if not isinstance(data, dict):
-        return {}, previous_dir.name
-    return _collect_title_elements(data), previous_dir.name
+        return {}, previous_dir.name, ""
+    fingerprint = str(data.get("sow_fingerprint") or "")
+    return _collect_title_elements(data), previous_dir.name, fingerprint
 
 
 def compare_with_previous_run(

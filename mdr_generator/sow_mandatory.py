@@ -19,6 +19,7 @@ from .models import MdrLineItem, RaciCandidate
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .scope_pdf import call_scope_llm_pdf, read_scope_pdf_bytes, unique_pdf_labels
 from .scope_run_history import _latest_previous_run
+from .sow_paths import sow_content_hashes
 from .utils import save_json
 
 _STOPWORDS = {
@@ -122,30 +123,48 @@ def _parse_mandatory_response(data: Dict[str, Any], source_pdf: str) -> List[dic
 def _load_previous_mandatory(
     runs_dir: Optional[Path],
     project: str,
-) -> Tuple[Dict[str, List[dict]], Optional[str]]:
-    """Return (source_pdf -> documents[], previous_run_name) — never raises."""
+    current_hashes: Dict[str, str],
+) -> Tuple[Dict[str, List[dict]], Optional[str], str]:
+    """
+    Return (pdf_name -> documents[], previous_run_name, reason).
+
+    Il riuso e' per singolo PDF ed e' ammesso solo se il contenuto di quel PDF
+    e' identico a quello della run precedente: stesso nome file con contenuto
+    diverso NON si riusa. Mai solleva.
+    """
     if not runs_dir or not project:
-        return {}, None
+        return {}, None, "no_runs_dir_or_project"
     try:
         previous_dir = _latest_previous_run(runs_dir, project)
     except Exception:
-        return {}, None
+        return {}, None, "previous_run_unreadable"
     if previous_dir is None:
-        return {}, None
+        return {}, None, "no_previous_run"
     path = previous_dir / "json" / "sow_mandatory_audit.json"
     if not path.exists():
-        return {}, previous_dir.name
+        return {}, previous_dir.name, "no_previous_audit"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}, previous_dir.name
+        return {}, previous_dir.name, "previous_audit_unreadable"
     if not isinstance(data, dict):
-        return {}, previous_dir.name
+        return {}, previous_dir.name, "previous_audit_unreadable"
+
+    previous_hashes = data.get("sow_content_hashes")
+    if not isinstance(previous_hashes, dict) or not previous_hashes:
+        return {}, previous_dir.name, "previous_run_without_hashes"
+
     by_pdf: Dict[str, List[dict]] = {}
     for row in data.get("documents") or []:
-        if isinstance(row, dict) and row.get("source_pdf"):
-            by_pdf.setdefault(str(row["source_pdf"]), []).append(row)
-    return by_pdf, previous_dir.name
+        if not isinstance(row, dict) or not row.get("source_pdf"):
+            continue
+        name = str(row["source_pdf"])
+        # Riusa solo i PDF il cui contenuto non e' cambiato.
+        if previous_hashes.get(name) != current_hashes.get(name):
+            continue
+        by_pdf.setdefault(name, []).append(row)
+    reason = "sow_unchanged" if by_pdf else "sow_changed"
+    return by_pdf, previous_dir.name, reason
 
 
 def run_sow_mandatory_pass(
@@ -172,12 +191,16 @@ def run_sow_mandatory_pass(
         return audit
 
     min_score = cfg_float("SOW_MANDATORY_MIN_MATCH_SCORE", 0.6)
-    reuse_enabled = cfg_bool("SOW_MANDATORY_REUSE_PREVIOUS", default=True)
-    previous_by_pdf, previous_run = (
-        _load_previous_mandatory(runs_dir, project) if reuse_enabled else ({}, None)
-    )
-
+    reuse_enabled = cfg_bool("SOW_MANDATORY_REUSE_PREVIOUS", default=False)
     pdf_labels = unique_pdf_labels(scope_pdfs)
+    # Chiavi per label: stesse usate in documents[].source_pdf.
+    current_hashes = sow_content_hashes(scope_pdfs, pdf_labels)
+    if reuse_enabled:
+        previous_by_pdf, previous_run, reuse_reason = _load_previous_mandatory(
+            runs_dir, project, current_hashes
+        )
+    else:
+        previous_by_pdf, previous_run, reuse_reason = {}, None, "disabled_by_config"
     reused_docs: List[dict] = []
     todo: List[Path] = []
     for pdf_path in scope_pdfs:
@@ -247,6 +270,8 @@ def run_sow_mandatory_pass(
         "min_match_score": min_score,
         "reuse_enabled": reuse_enabled,
         "reuse_previous_run": previous_run,
+        "reuse_reason": reuse_reason,
+        "sow_content_hashes": current_hashes,
         "pdfs_total": len(scope_pdfs),
         "pdfs_reused_previous": len(scope_pdfs) - len(todo),
         "pdfs_llm": len(todo),

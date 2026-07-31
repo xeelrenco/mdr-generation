@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mdr_generator import sow_mandatory
+from mdr_generator.config import cfg_bool as real_cfg_bool
 from mdr_generator.models import MdrLineItem, RaciCandidate
 from mdr_generator.sow_mandatory import (
     _best_catalog_match,
@@ -164,37 +165,82 @@ class RunPassTests(unittest.TestCase):
             self.assertEqual(len(audit["llm_errors"]), 1)
             self.assertEqual(audit["documents_total"], 0)
 
-    def test_previous_run_is_reused_without_llm(self) -> None:
+    def _write_previous(self, runs_dir: Path, pdf_hash: str) -> None:
+        prev_json = runs_dir / "J23210_20260101_120000" / "json"
+        prev_json.mkdir(parents=True, exist_ok=True)
+        (prev_json / "sow_mandatory_audit.json").write_text(
+            json.dumps(
+                {
+                    "sow_content_hashes": {"sow.pdf": pdf_hash},
+                    "documents": [
+                        {
+                            "document_name": "Valve List",
+                            "clause": "4.2",
+                            "evidence_quote": "shall submit",
+                            "source_pages": [3],
+                            "confidence": "strong",
+                            "source_pdf": "sow.pdf",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _run_with_reuse(self, tmp: str, previous_hash: str, current_hash: str) -> dict:
+        runs_dir = Path(tmp) / "runs"
+        self._write_previous(runs_dir, previous_hash)
+        json_dir = Path(tmp) / "json"
+        json_dir.mkdir(parents=True, exist_ok=True)
+
+        def _cfg_bool(key: str, default: bool = False) -> bool:
+            return True if key == "SOW_MANDATORY_REUSE_PREVIOUS" else real_cfg_bool(
+                key, default
+            )
+
+        with patch.object(
+            sow_mandatory, "sow_content_hashes", return_value={"sow.pdf": current_hash}
+        ), patch.object(sow_mandatory, "cfg_bool", _cfg_bool), patch.object(
+            sow_mandatory,
+            "call_scope_llm_pdf",
+            side_effect=RuntimeError("LLM chiamato"),
+        ), patch.object(sow_mandatory, "read_scope_pdf_bytes", return_value=b"%PDF"):
+            return run_sow_mandatory_pass(
+                [Path("sow.pdf")],
+                CATALOG,
+                [],
+                json_dir,
+                runs_dir=runs_dir,
+                project="J23210",
+            )
+
+    def test_previous_run_is_reused_when_pdf_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = self._run_with_reuse(tmp, "hash-A", "hash-A")
+            self.assertEqual(audit["pdfs_reused_previous"], 1)
+            self.assertEqual(audit["pdfs_llm"], 0)
+            self.assertEqual(audit["documents_total"], 1)
+            self.assertEqual(audit["reuse_reason"], "sow_unchanged")
+            self.assertEqual(audit["llm_errors"], [])
+
+    def test_changed_pdf_refuses_reuse(self) -> None:
+        """Stesso nome file, contenuto diverso: niente riuso."""
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = self._run_with_reuse(tmp, "hash-A", "hash-B")
+            self.assertEqual(audit["pdfs_reused_previous"], 0)
+            self.assertEqual(audit["pdfs_llm"], 1)
+            self.assertEqual(audit["reuse_reason"], "sow_changed")
+            self.assertEqual(audit["documents_total"], 0)
+
+    def test_reuse_off_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runs_dir = Path(tmp) / "runs"
-            prev_json = runs_dir / "J23210_20260101_120000" / "json"
-            prev_json.mkdir(parents=True, exist_ok=True)
-            (prev_json / "sow_mandatory_audit.json").write_text(
-                json.dumps(
-                    {
-                        "documents": [
-                            {
-                                "document_name": "Valve List",
-                                "clause": "4.2",
-                                "evidence_quote": "shall submit",
-                                "source_pages": [3],
-                                "confidence": "strong",
-                                "source_pdf": "sow.pdf",
-                            }
-                        ]
-                    }
-                ),
-                encoding="utf-8",
-            )
+            self._write_previous(runs_dir, "hash-A")
             json_dir = Path(tmp) / "json"
             json_dir.mkdir(parents=True, exist_ok=True)
-
-            def _fail(*args, **kwargs):
-                raise AssertionError("LLM non deve essere chiamato sui PDF riusati")
-
-            with patch.object(sow_mandatory, "call_scope_llm_pdf", _fail), patch.object(
-                sow_mandatory, "read_scope_pdf_bytes", _fail
-            ):
+            with patch.object(
+                sow_mandatory, "call_scope_llm_pdf", return_value={}
+            ), patch.object(sow_mandatory, "read_scope_pdf_bytes", return_value=b"%PDF"):
                 audit = run_sow_mandatory_pass(
                     [Path("sow.pdf")],
                     CATALOG,
@@ -203,10 +249,9 @@ class RunPassTests(unittest.TestCase):
                     runs_dir=runs_dir,
                     project="J23210",
                 )
-            self.assertEqual(audit["pdfs_reused_previous"], 1)
-            self.assertEqual(audit["pdfs_llm"], 0)
-            self.assertEqual(audit["documents_total"], 1)
-            self.assertEqual(audit["reuse_previous_run"], "J23210_20260101_120000")
+            self.assertFalse(audit["reuse_enabled"])
+            self.assertEqual(audit["reuse_reason"], "disabled_by_config")
+            self.assertEqual(audit["pdfs_llm"], 1)
 
     def test_no_scope_pdf_returns_empty_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
