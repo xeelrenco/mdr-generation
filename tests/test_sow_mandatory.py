@@ -264,3 +264,57 @@ class RunPassTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetryPolicyTests(unittest.TestCase):
+    NO_CREDITS = (
+        "Error code: 429 - {'error': {'message': 'You have no credits remaining. "
+        "Add credits to continue using the API', 'type': 'insufficient_quota'}}"
+    )
+    RATE_LIMIT = "Error code: 429 - rate_limit_exceeded: tokens per min"
+
+    def test_quota_exhausted_is_permanent(self) -> None:
+        self.assertTrue(
+            sow_mandatory._is_permanent_quota_error(Exception(self.NO_CREDITS))
+        )
+
+    def test_real_rate_limit_is_not_permanent(self) -> None:
+        self.assertFalse(
+            sow_mandatory._is_permanent_quota_error(Exception(self.RATE_LIMIT))
+        )
+
+    def _run_expecting_calls(self, error_text: str) -> tuple[dict, int, list]:
+        sleeps: list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            json_dir = Path(tmp) / "json"
+            json_dir.mkdir(parents=True, exist_ok=True)
+            call = patch.object(
+                sow_mandatory,
+                "call_scope_llm_pdf",
+                side_effect=RuntimeError(error_text),
+            )
+            with call as mocked, patch.object(
+                sow_mandatory, "read_scope_pdf_bytes", return_value=b"%PDF"
+            ), patch.object(sow_mandatory.time, "sleep", sleeps.append):
+                audit = run_sow_mandatory_pass(
+                    [Path("sow.pdf")], CATALOG, [], json_dir
+                )
+            return audit, mocked.call_count, sleeps
+
+    def test_no_credits_does_not_retry_or_sleep(self) -> None:
+        audit, calls, sleeps = self._run_expecting_calls(self.NO_CREDITS)
+        self.assertEqual(calls, 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(len(audit["llm_errors"]), 1)
+
+    def test_rate_limit_retries_with_growing_backoff(self) -> None:
+        audit, calls, sleeps = self._run_expecting_calls(self.RATE_LIMIT)
+        self.assertEqual(calls, 4)
+        self.assertEqual(sleeps, [60, 120, 180])
+        self.assertEqual(len(audit["llm_errors"]), 1)
+
+    def test_non_transient_error_fails_fast(self) -> None:
+        audit, calls, sleeps = self._run_expecting_calls("malformed prompt: 400")
+        self.assertEqual(calls, 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(len(audit["llm_errors"]), 1)

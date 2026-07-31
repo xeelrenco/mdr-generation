@@ -139,6 +139,11 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
         sow_mandatory.get("fail_on_missing", False),
     )
     set_key("SOW_MANDATORY_LLM_MODEL", sow_mandatory.get("llm_model", ""))
+    set_key("SOW_MANDATORY_MAX_ATTEMPTS", sow_mandatory.get("max_attempts", 4))
+    set_key(
+        "SOW_MANDATORY_RETRY_BACKOFF_SECONDS",
+        sow_mandatory.get("retry_backoff_seconds", 60),
+    )
 
     llm_pricing = data.get("llm_pricing") or {}
     if isinstance(llm_pricing, dict):

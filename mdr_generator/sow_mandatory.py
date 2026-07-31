@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from .config import cfg_bool, cfg_float
+from .config import cfg_bool, cfg_float, cfg_int
 from .models import MdrLineItem, RaciCandidate
-from .parallel_workers import llm_parallel_workers, run_parallel
-from .scope_pdf import call_scope_llm_pdf, read_scope_pdf_bytes, unique_pdf_labels
+from .parallel_workers import llm_parallel_workers, pipeline_log, run_parallel
+from .scope_pdf import (
+    call_scope_llm_pdf,
+    is_transient_llm_error,
+    read_scope_pdf_bytes,
+    unique_pdf_labels,
+)
 from .scope_run_history import _latest_previous_run
 from .sow_paths import sow_content_hashes
 from .utils import save_json
@@ -50,6 +56,25 @@ Return STRICT JSON:
 
 Return an empty list if the SoW carries no explicit deliverable obligation.
 """
+
+
+_PERMANENT_QUOTA_MARKERS = (
+    "insufficient_quota",
+    "no credits remaining",
+    "billing",
+    "exceeded your current quota",
+    "payment required",
+)
+
+
+def _is_permanent_quota_error(error: BaseException) -> bool:
+    """
+    Credito esaurito / billing: arriva come HTTP 429, quindi
+    is_transient_llm_error lo scambia per un rate limit temporaneo. Aspettare
+    non serve, va interrotto subito invece di dormire minuti a vuoto.
+    """
+    text = str(error).lower()
+    return any(marker in text for marker in _PERMANENT_QUOTA_MARKERS)
 
 
 def _tokens(text: str) -> Set[str]:
@@ -213,20 +238,45 @@ def run_sow_mandatory_pass(
     documents: List[dict] = list(reused_docs)
     errors: List[dict] = []
 
+    # Questo pass gira in coda a una pipeline che ha appena consumato molti
+    # token: il rate limit e' lo scenario normale, non l'eccezione. Il retry
+    # interno del provider (3 tentativi, max 30s) e' troppo corto, quindi qui
+    # si riprova con attese lunghe. Solo per errori transitori: un prompt
+    # malformato non deve girare in loop.
+    max_attempts = cfg_int("SOW_MANDATORY_MAX_ATTEMPTS", 4)
+    backoff_seconds = cfg_int("SOW_MANDATORY_RETRY_BACKOFF_SECONDS", 60)
+
     def _job(pdf_path: Path) -> Tuple[str, List[dict], Optional[str]]:
         label = pdf_labels[pdf_path]
-        try:
-            data = call_scope_llm_pdf(
-                MANDATORY_PROMPT,
-                pdf_path,
-                read_scope_pdf_bytes(pdf_path),
-                model=model,
-                pass_id="pass1",
-                stage="pass10_sow_mandatory",
-            )
-            return label, _parse_mandatory_response(data, label), None
-        except Exception as ex:  # fail-open: mai bloccante
-            return label, [], str(ex)
+        last_error = ""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                data = call_scope_llm_pdf(
+                    MANDATORY_PROMPT,
+                    pdf_path,
+                    read_scope_pdf_bytes(pdf_path),
+                    model=model,
+                    pass_id="pass1",
+                    stage="pass10_sow_mandatory",
+                )
+                return label, _parse_mandatory_response(data, label), None
+            except Exception as ex:  # fail-open: mai bloccante
+                last_error = str(ex)
+                if _is_permanent_quota_error(ex):
+                    pipeline_log(
+                        f"  [SoW obbligatori] {label}: credito/quota esaurita, "
+                        "nessun ritento"
+                    )
+                    break
+                if attempt >= max_attempts or not is_transient_llm_error(ex):
+                    break
+                wait_for = backoff_seconds * attempt
+                pipeline_log(
+                    f"  [SoW obbligatori] {label}: errore transitorio, "
+                    f"ritento tra {wait_for}s ({attempt}/{max_attempts - 1})"
+                )
+                time.sleep(wait_for)
+        return label, [], last_error
 
     if todo:
         for label, docs, error in run_parallel(

@@ -73,6 +73,8 @@ enabled = true
 min_match_score = 0.6  # copertura minima dei token del nome documento sul titolo RACI
 reuse_previous_run = false  # come sopra: solo test, e decade se il PDF cambia
 fail_on_missing = false  # true = solo warning piu' marcato in QA, mai exit 1
+max_attempts = 4  # questo pass gira a fine pipeline: rate limit e' normale
+retry_backoff_seconds = 60  # attesa base, cresce a ogni tentativo (60/120/180)
 llm_model = ""  # vuoto = usa scope.pass1.llm_model
 
 # Opzionale: override tariffe stima costi LLM (USD per 1M token)
