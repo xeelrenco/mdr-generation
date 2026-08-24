@@ -542,8 +542,6 @@ def main() -> int:
                 scope_decisions,
                 json_dir,
                 model=title_model,
-                runs_dir=output_dir / "runs",
-                project=project,
             )
             in_scope = [d for d in scope_decisions if d.in_scope]
             print(
@@ -553,13 +551,6 @@ def main() -> int:
                 f"{title_enrichment_audit.get('final_rows', '?')} "
                 f"(+{title_enrichment_audit.get('extra_rows', 0)} split)"
             )
-            reused = title_enrichment_audit.get("docs_reused_previous", 0)
-            if reused:
-                print(
-                    f"  -> {reused} doc con suffisso SoW riusato da "
-                    f"{title_enrichment_audit.get('reuse_previous_run', '?')} "
-                    f"({title_enrichment_audit.get('docs_llm', 0)} via LLM)"
-                )
         else:
             save_json(
                 json_dir / "title_enrichment_audit.json",
@@ -581,8 +572,6 @@ def main() -> int:
             line_items,
             json_dir,
             model=cfg("SOW_MANDATORY_LLM_MODEL") or args.scope_llm_model,
-            runs_dir=output_dir / "runs",
-            project=project,
         )
         if sow_mandatory_audit.get("enabled"):
             missing = sow_mandatory_audit.get("documents_missing", 0)

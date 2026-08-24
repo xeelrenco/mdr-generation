@@ -295,6 +295,14 @@ def _vertex_credentials_path() -> Optional[str]:
     return str(path)
 
 
+def _vertex_location(model: str) -> str:
+    """Gemini 3.x (incluso 3.1 Pro preview) e' disponibile solo sull'endpoint global."""
+    key = (model or "").lower().strip()
+    if key.startswith("gemini-3"):
+        return "global"
+    return cfg("VERTEX_LOCATION", "europe-west1")
+
+
 def _openai_supports_custom_temperature(model: str) -> bool:
     """GPT-5 / o-series accettano solo temperature default (1)."""
     m = model.lower()
@@ -414,7 +422,7 @@ def _call_gemini_pdf(
     client = genai.Client(
         vertexai=True,
         project=cfg("VERTEX_PROJECT_ID"),
-        location=cfg("VERTEX_LOCATION", "europe-west1"),
+        location=_vertex_location(model),
     )
     response = client.models.generate_content(
         model=model,
@@ -600,7 +608,7 @@ def _call_gemini_text(
     client = genai.Client(
         vertexai=True,
         project=cfg("VERTEX_PROJECT_ID"),
-        location=cfg("VERTEX_LOCATION", "europe-west1"),
+        location=_vertex_location(model),
     )
     response = client.models.generate_content(
         model=model,

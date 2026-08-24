@@ -9,7 +9,6 @@ obbligatori che non finiscono nell'MDR sono un warning, non un errore.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from pathlib import Path
@@ -24,8 +23,6 @@ from .scope_pdf import (
     read_scope_pdf_bytes,
     unique_pdf_labels,
 )
-from .scope_run_history import _latest_previous_run
-from .sow_paths import sow_content_hashes
 from .utils import save_json
 
 _STOPWORDS = {
@@ -43,16 +40,26 @@ obligation in words (shall/must/to be submitted/to be issued/deliverable list).
 DO NOT infer documents from the described activities. DO NOT list documents that
 are merely referenced as input from the client or third parties.
 
+The SoW may be written in any language (often Italian). The document register
+catalog is in ENGLISH, so every deliverable needs an English name too.
+
 For each document return:
 - document_name: the deliverable name exactly as written in the SoW
+- document_name_en: the same deliverable in standard English engineering
+  terminology, as it would appear in a Master Document Register.
+  Examples: "Manuali operativi" -> "Operating Manuals";
+  "Cataloghi meccanici" -> "Mechanical Catalogues";
+  "Programma di approvvigionamento" -> "Procurement Schedule".
+  If the SoW name is already English, repeat it unchanged.
 - clause: the clause/section number or heading carrying the obligation ("" if none)
 - evidence_quote: the literal sentence proving the obligation (max 250 chars)
 - source_pages: page numbers where it appears
 - confidence: "strong" | "medium" | "weak"
 
 Return STRICT JSON:
-{"mandatory_documents": [{"document_name": "...", "clause": "...",
-"evidence_quote": "...", "source_pages": [1], "confidence": "strong"}]}
+{"mandatory_documents": [{"document_name": "...", "document_name_en": "...",
+"clause": "...", "evidence_quote": "...", "source_pages": [1],
+"confidence": "strong"}]}
 
 Return an empty list if the SoW carries no explicit deliverable obligation.
 """
@@ -132,9 +139,13 @@ def _parse_mandatory_response(data: Dict[str, Any], source_pdf: str) -> List[dic
         confidence = str(item.get("confidence") or "medium").strip().lower()
         if confidence not in ("strong", "medium", "weak"):
             confidence = "medium"
+        # Il catalogo RACI e' in inglese: il matching usa la forma inglese, ma
+        # il nome originale resta nell'audit per la verifica umana.
+        name_en = str(item.get("document_name_en") or "").strip() or name
         out.append(
             {
                 "document_name": name[:200],
+                "document_name_en": name_en[:200],
                 "clause": str(item.get("clause") or "").strip()[:80],
                 "evidence_quote": str(item.get("evidence_quote") or "").strip()[:250],
                 "source_pages": pages,
@@ -145,61 +156,12 @@ def _parse_mandatory_response(data: Dict[str, Any], source_pdf: str) -> List[dic
     return out
 
 
-def _load_previous_mandatory(
-    runs_dir: Optional[Path],
-    project: str,
-    current_hashes: Dict[str, str],
-) -> Tuple[Dict[str, List[dict]], Optional[str], str]:
-    """
-    Return (pdf_name -> documents[], previous_run_name, reason).
-
-    Il riuso e' per singolo PDF ed e' ammesso solo se il contenuto di quel PDF
-    e' identico a quello della run precedente: stesso nome file con contenuto
-    diverso NON si riusa. Mai solleva.
-    """
-    if not runs_dir or not project:
-        return {}, None, "no_runs_dir_or_project"
-    try:
-        previous_dir = _latest_previous_run(runs_dir, project)
-    except Exception:
-        return {}, None, "previous_run_unreadable"
-    if previous_dir is None:
-        return {}, None, "no_previous_run"
-    path = previous_dir / "json" / "sow_mandatory_audit.json"
-    if not path.exists():
-        return {}, previous_dir.name, "no_previous_audit"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}, previous_dir.name, "previous_audit_unreadable"
-    if not isinstance(data, dict):
-        return {}, previous_dir.name, "previous_audit_unreadable"
-
-    previous_hashes = data.get("sow_content_hashes")
-    if not isinstance(previous_hashes, dict) or not previous_hashes:
-        return {}, previous_dir.name, "previous_run_without_hashes"
-
-    by_pdf: Dict[str, List[dict]] = {}
-    for row in data.get("documents") or []:
-        if not isinstance(row, dict) or not row.get("source_pdf"):
-            continue
-        name = str(row["source_pdf"])
-        # Riusa solo i PDF il cui contenuto non e' cambiato.
-        if previous_hashes.get(name) != current_hashes.get(name):
-            continue
-        by_pdf.setdefault(name, []).append(row)
-    reason = "sow_unchanged" if by_pdf else "sow_changed"
-    return by_pdf, previous_dir.name, reason
-
-
 def run_sow_mandatory_pass(
     scope_pdfs: List[Path],
     candidates: List[RaciCandidate],
     line_items: List[MdrLineItem],
     json_dir: Path,
     model: Optional[str] = None,
-    runs_dir: Optional[Path] = None,
-    project: str = "",
 ) -> dict:
     """
     Estrae i deliverable obbligatori dallo SoW, li mappa sul catalogo RACI e
@@ -216,26 +178,10 @@ def run_sow_mandatory_pass(
         return audit
 
     min_score = cfg_float("SOW_MANDATORY_MIN_MATCH_SCORE", 0.6)
-    reuse_enabled = cfg_bool("SOW_MANDATORY_REUSE_PREVIOUS", default=False)
     pdf_labels = unique_pdf_labels(scope_pdfs)
-    # Chiavi per label: stesse usate in documents[].source_pdf.
-    current_hashes = sow_content_hashes(scope_pdfs, pdf_labels)
-    if reuse_enabled:
-        previous_by_pdf, previous_run, reuse_reason = _load_previous_mandatory(
-            runs_dir, project, current_hashes
-        )
-    else:
-        previous_by_pdf, previous_run, reuse_reason = {}, None, "disabled_by_config"
-    reused_docs: List[dict] = []
-    todo: List[Path] = []
-    for pdf_path in scope_pdfs:
-        label = pdf_labels[pdf_path]
-        if label in previous_by_pdf:
-            reused_docs.extend(previous_by_pdf[label])
-        else:
-            todo.append(pdf_path)
+    todo: List[Path] = list(scope_pdfs)
 
-    documents: List[dict] = list(reused_docs)
+    documents: List[dict] = []
     errors: List[dict] = []
 
     # Questo pass gira in coda a una pipeline che ha appena consumato molti
@@ -297,7 +243,9 @@ def run_sow_mandatory_pass(
     missing: List[dict] = []
     unmapped: List[dict] = []
     for doc in documents:
-        title_key, title, score = _best_catalog_match(doc["document_name"], catalog)
+        title_key, title, score = _best_catalog_match(
+            doc.get("document_name_en") or doc["document_name"], catalog
+        )
         if score < min_score or not title_key:
             doc["match_status"] = "unmapped"
             doc["match_score"] = score
@@ -318,12 +266,7 @@ def run_sow_mandatory_pass(
     audit = {
         "enabled": True,
         "min_match_score": min_score,
-        "reuse_enabled": reuse_enabled,
-        "reuse_previous_run": previous_run,
-        "reuse_reason": reuse_reason,
-        "sow_content_hashes": current_hashes,
         "pdfs_total": len(scope_pdfs),
-        "pdfs_reused_previous": len(scope_pdfs) - len(todo),
         "pdfs_llm": len(todo),
         "documents_total": len(documents),
         "documents_in_mdr": matched,

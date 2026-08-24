@@ -23,12 +23,13 @@ chunk_repass_min_chars = 200
 [scope.pass2]
 enabled = true
 llm_model = "claude-sonnet-4-6"  # verifica catalogo indipendente dal pass 1
-arbiter_llm_model = "gemini-2.5-pro"  # solo sui disaccordi/unknown tra pass 1 e pass 2
+arbiter_llm_model = "gemini-3.1-pro-preview"  # solo sui disaccordi/unknown tra pass 1 e pass 2
 batch_size = 30
 workers = 4
 chunk_enabled = true
 chunk_pages = 10
 chunk_overlap = 2
+job_max_attempts = 3  # ritenta un job se il JSON e' illeggibile o mancano coppie assegnate
 
 [providers.openai]
 api_key = ""
@@ -60,9 +61,6 @@ min_confidence = "medium"
 llm_model = ""  # vuoto = usa scope.pass1.llm_model
 examples_path = "input/title_enrichment_examples.json"
 max_examples = 24
-reuse_previous_run = false  # SOLO per test: riusa i sow_elements della run precedente.
-                           # Decade da solo se lo SoW cambia (hash del contenuto).
-                           # In produzione lascia false: ogni run rispecchia lo SoW caricato.
 generic_filter = true  # scarta suffissi generici (livello impianto/unita) quando si splitta
 generic_patterns = []  # regex extra opzionali; le cifre/tag salvano sempre il titolo
 
@@ -71,25 +69,36 @@ generic_patterns = []  # regex extra opzionali; le cifre/tag salvano sempre il t
 # esplicitamente a consegnare. Solo audit + foglio QA, non blocca la pipeline.
 enabled = true
 min_match_score = 0.6  # copertura minima dei token del nome documento sul titolo RACI
-reuse_previous_run = false  # come sopra: solo test, e decade se il PDF cambia
 fail_on_missing = false  # true = solo warning piu' marcato in QA, mai exit 1
 max_attempts = 4  # questo pass gira a fine pipeline: rate limit e' normale
 retry_backoff_seconds = 60  # attesa base, cresce a ogni tentativo (60/120/180)
 llm_model = ""  # vuoto = usa scope.pass1.llm_model
 
-# Opzionale: override tariffe stima costi LLM (USD per 1M token)
+# Opzionale: override tariffe stima costi LLM (USD per 1M token, standard short-context)
 # [llm_pricing.gpt_5_5]
 # input_per_1m = 5.00
 # output_per_1m = 30.00
 # [llm_pricing.gpt_5_6_sol]
-# input_per_1m = 5.00
-# output_per_1m = 30.00
+# input_per_1m = 4.00
+# output_per_1m = 20.00
+# [llm_pricing.gpt_5_6_luna]
+# input_per_1m = 0.20
+# output_per_1m = 1.20
 # [llm_pricing.gemini_2_5_pro]
 # input_per_1m = 1.25
-# output_per_1m = 5.00
+# output_per_1m = 10.00
+# [llm_pricing.gemini_3_1_pro_preview]
+# input_per_1m = 2.00
+# output_per_1m = 12.00
+# [llm_pricing.gemini_2_5_flash]
+# input_per_1m = 0.30
+# output_per_1m = 2.50
 # [llm_pricing.claude_sonnet_4_6]
 # input_per_1m = 3.00
 # output_per_1m = 15.00
 # [llm_pricing.claude_opus_4_8]
 # input_per_1m = 5.00
 # output_per_1m = 25.00
+# [llm_pricing.claude_haiku_4_5]
+# input_per_1m = 1.00
+# output_per_1m = 5.00

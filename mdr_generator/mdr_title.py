@@ -9,7 +9,9 @@ TITLE_SEPARATOR = " | "
 DISPLAY_TITLE_SEPARATOR = TITLE_SEPARATOR
 
 _LIST_TITLE_RE = re.compile(
-    r"(?:\blists?\b|\bregisters?\b|\bindexes?\b|\bindices\b)",
+    # "index(es)": il quantificatore va sul gruppo "es", altrimenti `indexes?`
+    # significa "indexe" + "s" opzionale e il singolare "Index" non matcha.
+    r"(?:\blists?\b|\bregisters?\b|\bindex(?:es)?\b|\bindices\b)",
     re.IGNORECASE,
 )
 

@@ -1,21 +1,14 @@
 from __future__ import annotations
 
 import importlib
-import json
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from mdr_generator.mdr_title import format_mdr_display_title
+from mdr_generator.mdr_title import format_mdr_display_title, is_list_like_title
 from mdr_generator.models import (
     DocumentInstanceSpec,
     DocumentScopeDecision,
-    NormalizedSignal,
     RaciCandidate,
 )
-from mdr_generator.config import cfg_bool as real_cfg_bool
-from mdr_generator.scope_run_history import load_previous_title_elements
 
 enrichment = importlib.import_module("mdr_generator.9_title_enrichment")
 expansion = importlib.import_module("mdr_generator.10_instance_expansion")
@@ -273,234 +266,40 @@ class GenericSuffixTests(unittest.TestCase):
         )
 
 
-def _reuse_enabled_cfg_bool(key: str, default: bool = False) -> bool:
-    """cfg_bool reale, ma con il riuso forzato on (di default e' off)."""
-    if key == "TITLE_ENRICHMENT_REUSE_PREVIOUS":
-        return True
-    return real_cfg_bool(key, default)
+class ListLikeTitleTests(unittest.TestCase):
+    """Le liste non vanno splittate in una riga per elemento (feedback Renco)."""
 
+    def test_list_titles_are_detected(self) -> None:
+        for title in (
+            "Power and Control Cable List",
+            "Valve List",
+            "Equipment List",
+            "Line List",
+            "Document Register",
+            "Instrument Index",
+            "Document Indexes",
+            "Drawing Indices",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(is_list_like_title(title))
 
-class PreviousRunReuseTests(unittest.TestCase):
-    FINGERPRINT = "sha-sow-v1"
+    def test_non_list_titles_are_not_detected(self) -> None:
+        for title in ("As Built Drawings", "Data Sheet for Pumps", "Plot Plan"):
+            with self.subTest(title=title):
+                self.assertFalse(is_list_like_title(title))
 
-    def _write_previous_audit(
-        self,
-        runs_dir: Path,
-        project: str,
-        audit: dict,
-        fingerprint: str | None = FINGERPRINT,
-    ) -> None:
-        json_dir = runs_dir / f"{project}_20260101_120000" / "json"
-        json_dir.mkdir(parents=True, exist_ok=True)
-        payload = dict(audit)
-        if fingerprint is not None:
-            payload["sow_fingerprint"] = fingerprint
-        (json_dir / "title_enrichment_audit.json").write_text(
-            json.dumps(payload), encoding="utf-8"
+    def test_list_document_is_never_split(self) -> None:
+        dec = _decision(
+            title_key="valve list", raci_title="Valve List", instance_count=1
         )
-
-    def _run_pass(
-        self,
-        dec,
-        runs_dir: Path,
-        json_dir: Path,
-        fingerprint: str,
-        allow_llm: bool = False,
-    ):
-        """
-        allow_llm=False: qualsiasi chiamata LLM fa fallire il test (il riuso
-        deve coprire tutto). allow_llm=True: l'LLM parte ma va in errore, cosi'
-        si verifica che il riuso sia stato rifiutato senza dipendere dalla rete.
-        """
-        signal = NormalizedSignal(
-            scope_section="test",
-            discipline_code=dec.discipline_code,
-            chapter_name=dec.chapter_name,
-            confidence="strong",
-            normalization_method="test",
+        updated, audit = _apply_elements_to_decision(
+            dec,
+            [_element("Gate Valves"), _element("Ball Valves"), _element("Check Valves")],
+            split_rows=True,
         )
-
-        def _no_llm(*args, **kwargs):
-            raise AssertionError("LLM non deve essere chiamato sui title_key riusati")
-
-        if allow_llm:
-            llm_patch = patch.object(
-                enrichment, "call_scope_llm_text", side_effect=RuntimeError("no net")
-            )
-            pdf_patch = patch.object(
-                enrichment, "read_scope_pdf_bytes", return_value=b"%PDF"
-            )
-        else:
-            llm_patch = patch.object(enrichment, "call_scope_llm_text", _no_llm)
-            pdf_patch = patch.object(enrichment, "read_scope_pdf_bytes", _no_llm)
-
-        with llm_patch, pdf_patch, patch.object(
-            enrichment, "cfg_bool", _reuse_enabled_cfg_bool
-        ), patch.object(enrichment, "sow_fingerprint", return_value=fingerprint):
-            return enrichment.run_title_enrichment_pass(
-                [Path("sow.pdf")],
-                [],
-                [signal],
-                [dec],
-                json_dir,
-                runs_dir=runs_dir,
-                project="J23210",
-            )
-
-    def test_audit_row_persists_sow_elements(self) -> None:
-        dec = _decision(instance_count=1, scalable=False)
-        _, audit = _apply_elements_to_decision(
-            dec, [_element("Commissioning")], split_rows=True
-        )
-        self.assertEqual(len(audit["sow_elements"]), 1)
-        self.assertEqual(
-            audit["sow_elements"][0]["sow_specific_title"], "Commissioning"
-        )
-
-    def test_load_previous_title_elements_roundtrip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            runs_dir = Path(tmp) / "runs"
-            self._write_previous_audit(
-                runs_dir,
-                "J23210",
-                {
-                    "pairs": [
-                        {
-                            "discipline_code": "M",
-                            "documents": [
-                                {
-                                    "title_key": "as built miscellaneous rotating",
-                                    "sow_elements": [_element("New Steam Generator")],
-                                },
-                                {"title_key": "omitted", "outcome": "omitted_by_llm"},
-                            ],
-                        }
-                    ]
-                },
-            )
-            elements, run_name, fingerprint = load_previous_title_elements(
-                runs_dir, "J23210"
-            )
-            self.assertEqual(run_name, "J23210_20260101_120000")
-            self.assertEqual(fingerprint, self.FINGERPRINT)
-            self.assertIn("as built miscellaneous rotating", elements)
-            self.assertNotIn("omitted", elements)
-
-    def test_load_previous_returns_empty_without_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            elements, run_name, fingerprint = load_previous_title_elements(
-                Path(tmp) / "runs", "J23210"
-            )
-            self.assertEqual(elements, {})
-            self.assertIsNone(run_name)
-            self.assertEqual(fingerprint, "")
-
-    def _previous_audit_payload(self, dec) -> dict:
-        return {
-            "pairs": [
-                {
-                    "documents": [
-                        {
-                            "title_key": dec.title_key,
-                            "sow_elements": [_element("New Steam Generator")],
-                        }
-                    ]
-                }
-            ]
-        }
-
-    def test_reused_elements_skip_llm_and_keep_count(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            runs_dir, json_dir = Path(tmp) / "runs", Path(tmp) / "json"
-            json_dir.mkdir(parents=True, exist_ok=True)
-            dec = _decision(instance_count=4)
-            self._write_previous_audit(
-                runs_dir, "J23210", self._previous_audit_payload(dec)
-            )
-            decisions, summary = self._run_pass(
-                dec, runs_dir, json_dir, self.FINGERPRINT
-            )
-
-            self.assertEqual(summary["docs_reused_previous"], 1)
-            self.assertEqual(summary["docs_llm"], 0)
-            self.assertEqual(summary["pairs_llm"], 0)
-            self.assertEqual(summary["reuse_reason"], "sow_unchanged")
-            self.assertEqual(summary["reuse_previous_run"], "J23210_20260101_120000")
-            self.assertEqual(decisions[0].instance_count, 4)
-            self.assertTrue(
-                all(
-                    i.sow_specific_title == "New Steam Generator"
-                    for i in decisions[0].instances
-                )
-            )
-
-    def test_changed_sow_refuses_reuse(self) -> None:
-        """SoW diverso: i suffissi vecchi NON devono sopravvivere."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runs_dir, json_dir = Path(tmp) / "runs", Path(tmp) / "json"
-            json_dir.mkdir(parents=True, exist_ok=True)
-            dec = _decision(instance_count=4)
-            self._write_previous_audit(
-                runs_dir, "J23210", self._previous_audit_payload(dec)
-            )
-            # L'LLM viene richiamato: _run_pass fallisce se qualcuno lo invoca,
-            # quindi qui l'errore di rete diventa un pair audit "llm_error".
-            decisions, summary = self._run_pass(
-                dec, runs_dir, json_dir, "sha-sow-DIVERSO", allow_llm=True
-            )
-            self.assertEqual(summary["docs_reused_previous"], 0)
-            self.assertEqual(summary["reuse_reason"], "sow_changed")
-            self.assertEqual(decisions[0].instances, dec.instances)
-
-    def test_previous_run_without_fingerprint_refuses_reuse(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            runs_dir, json_dir = Path(tmp) / "runs", Path(tmp) / "json"
-            json_dir.mkdir(parents=True, exist_ok=True)
-            dec = _decision(instance_count=4)
-            self._write_previous_audit(
-                runs_dir, "J23210", self._previous_audit_payload(dec), fingerprint=None
-            )
-            _, summary = self._run_pass(
-                dec, runs_dir, json_dir, self.FINGERPRINT, allow_llm=True
-            )
-            self.assertEqual(summary["docs_reused_previous"], 0)
-            self.assertEqual(summary["reuse_reason"], "previous_run_without_fingerprint")
-
-    def test_reuse_off_by_default(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            runs_dir, json_dir = Path(tmp) / "runs", Path(tmp) / "json"
-            json_dir.mkdir(parents=True, exist_ok=True)
-            dec = _decision(instance_count=4)
-            self._write_previous_audit(
-                runs_dir, "J23210", self._previous_audit_payload(dec)
-            )
-            signal = NormalizedSignal(
-                scope_section="test",
-                discipline_code=dec.discipline_code,
-                chapter_name=dec.chapter_name,
-                confidence="strong",
-                normalization_method="test",
-            )
-            # cfg_bool NON patchato: vince il default di produzione.
-            with patch.object(
-                enrichment, "call_scope_llm_text", side_effect=RuntimeError("no net")
-            ), patch.object(enrichment, "read_scope_pdf_bytes", return_value=b"%PDF"), (
-                patch.object(
-                    enrichment, "sow_fingerprint", return_value=self.FINGERPRINT
-                )
-            ):
-                _, summary = enrichment.run_title_enrichment_pass(
-                    [Path("sow.pdf")],
-                    [],
-                    [signal],
-                    [dec],
-                    json_dir,
-                    runs_dir=runs_dir,
-                    project="J23210",
-                )
-            self.assertFalse(summary["reuse_enabled"])
-            self.assertEqual(summary["docs_reused_previous"], 0)
-            self.assertEqual(summary["reuse_reason"], "disabled_by_config")
+        self.assertTrue(audit["list_no_split"])
+        self.assertEqual(updated.instance_count, 1)
+        self.assertIn("list_no_split", updated.qa_flags)
 
 
 if __name__ == "__main__":

@@ -1068,11 +1068,6 @@ def write_qa_report(
                 "nome SoW non riconducibile a un titolo RACI.",
             ],
             [
-                "PDF riusati da run precedente",
-                sow_mandatory_audit.get("pdfs_reused_previous", 0),
-                str(sow_mandatory_audit.get("reuse_previous_run") or "—"),
-            ],
-            [
                 "Errori LLM (fail-open)",
                 len(sow_mandatory_audit.get("llm_errors") or []),
                 "PDF non analizzati: l'assenza di obbligatori non è conclusiva.",
@@ -1091,6 +1086,7 @@ def write_qa_report(
             rows = [
                 [
                     doc.get("document_name", ""),
+                    doc.get("document_name_en", ""),
                     doc.get("clause", ""),
                     doc.get("matched_raci_title", ""),
                     doc.get("match_score", ""),
@@ -1109,6 +1105,7 @@ def write_qa_report(
                     row,
                     [
                         "Documento (nome SoW)",
+                        "Nome EN (usato per il match)",
                         "Clausola",
                         "Titolo RACI mappato",
                         "Score",
@@ -1118,7 +1115,7 @@ def write_qa_report(
                         "Citazione (evidence)",
                     ],
                     rows,
-                    [40, 14, 40, 8, 12, 24, 12, 60],
+                    [40, 36, 14, 40, 8, 12, 24, 12, 60],
                 )
             else:
                 ws.cell(row=row, column=1, value="(nessuna riga)")

@@ -13,7 +13,7 @@ import duckdb
 from .config import cfg, cfg_bool, cfg_int
 from .db import DOCUMENTS_ENRICHED_VIEW
 from .models import NormalizedSignal, RawScopeSignal
-from .parallel_workers import llm_parallel_workers, run_parallel
+from .parallel_workers import llm_parallel_workers, pipeline_log, run_parallel
 from .raci_vocabulary import (
     RaciVocabulary,
     build_arbiter_prompt,
@@ -157,6 +157,9 @@ class _VerificationResult:
     missing_pairs: List[Pair]
     invalid_rows: List[str]
     verdicts: Dict[Pair, Dict[str, Any]] = field(default_factory=dict)
+    attempts: int = 1
+    job_status: str = "ok"
+    retry_log: List[str] = field(default_factory=list)
 
 
 def _llm_stage(job: _VerificationJob) -> str:
@@ -298,6 +301,110 @@ def _run_verification_job(
         stage=_llm_stage(job),
     )
     return _parse_verification_response(data, job)
+
+
+def _empty_failure_result(
+    job: _VerificationJob, kind: str, error: BaseException
+) -> _VerificationResult:
+    return _VerificationResult(
+        job=job,
+        decisions={},
+        positive_raw={},
+        missing_pairs=list(job.target_list),
+        invalid_rows=[f"{kind}:{str(error)[:300]}"],
+        job_status=kind,
+    )
+
+
+def _job_status(result: _VerificationResult) -> str:
+    """
+    ok: ogni coppia assegnata ha un voto valido.
+    invalid_llm_json / transient_llm_error: risposta illeggibile o errore provider.
+    invalid_response: JSON parsato ma senza lista decisions.
+    incomplete_pairs: JSON usabile, ma coppie omesse o true senza evidenza.
+    """
+    if not result.missing_pairs:
+        return "ok"
+    for row in result.invalid_rows:
+        if str(row).startswith("invalid_llm_json:"):
+            return "invalid_llm_json"
+        if str(row).startswith("transient_llm_error:"):
+            return "transient_llm_error"
+    if "decisions_not_list" in result.invalid_rows:
+        return "invalid_response"
+    return "incomplete_pairs"
+
+
+def _prefer_verification_result(
+    current: Optional[_VerificationResult],
+    incoming: _VerificationResult,
+) -> _VerificationResult:
+    if current is None:
+        return incoming
+    if len(incoming.missing_pairs) != len(current.missing_pairs):
+        return (
+            incoming
+            if len(incoming.missing_pairs) < len(current.missing_pairs)
+            else current
+        )
+    if len(incoming.decisions) != len(current.decisions):
+        return incoming if len(incoming.decisions) > len(current.decisions) else current
+    return incoming
+
+
+def _run_verification_job_with_retry(
+    job: _VerificationJob,
+    pdf_path: Path,
+    pdf_bytes: bytes,
+    model: str,
+    pair_examples: Dict[Pair, List[str]],
+    arbiter_context: Optional[Dict[Pair, Dict[str, Any]]] = None,
+) -> _VerificationResult:
+    """
+    Distingue JSON illeggibile e JSON valido ma incompleto; ritenta entrambi.
+
+    Dopo i tentativi tiene il risultato con meno coppie mancanti (un JSON
+    parziale batte una chiamata morta). Le coppie ancora senza voto restano
+    missing e l'aggregazione puo' ancora produrre unknown.
+    """
+    max_attempts = max(1, cfg_int("SCOPE_PASS2_JOB_MAX_ATTEMPTS", 3))
+    best: Optional[_VerificationResult] = None
+    retry_log: List[str] = []
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = _run_verification_job(
+                job, pdf_path, pdf_bytes, model, pair_examples, arbiter_context
+            )
+        except Exception as error:
+            invalid_json = _is_invalid_llm_json(error)
+            if not (_is_transient_quota_error(error) or invalid_json):
+                raise
+            kind = "invalid_llm_json" if invalid_json else "transient_llm_error"
+            result = _empty_failure_result(job, kind, error)
+        status = _job_status(result)
+        result.attempts = attempt
+        result.job_status = status
+        best = _prefer_verification_result(best, result)
+        if status == "ok":
+            best.attempts = attempt
+            best.job_status = "ok"
+            best.retry_log = retry_log
+            return best
+        missing_n = len(result.missing_pairs)
+        retry_log.append(f"{status}: missing={missing_n}")
+        if attempt >= max_attempts:
+            break
+        label = "arbiter" if job.arbiter else "pass2"
+        pipeline_log(
+            f"  [{label}] retry {attempt + 1}/{max_attempts} {status} "
+            f"batch {job.batch_index + 1} pagine {job.page_start}-{job.page_end} "
+            f"(mancano {missing_n}/{len(job.target_list)} coppie)"
+        )
+    assert best is not None
+    best.attempts = max_attempts
+    best.job_status = _job_status(best)
+    best.retry_log = retry_log
+    return best
 
 
 def _aggregate_votes(
@@ -475,31 +582,17 @@ def _scan_catalog(
 
         def _note(_job: _VerificationJob, result: _VerificationResult) -> str:
             positives = sum(1 for value in result.decisions.values() if value)
+            extra = ""
+            if result.attempts > 1 or result.job_status != "ok":
+                extra = f", {result.job_status} attempts={result.attempts}"
             return (
-                f"-> {positives} presenti, {len(result.missing_pairs)} mancanti"
+                f"-> {positives} presenti, {len(result.missing_pairs)} mancanti{extra}"
             )
 
         def _call(job: _VerificationJob) -> _VerificationResult:
-            try:
-                return _run_verification_job(
-                    job, pdf_path, pdf_bytes, model, pair_examples, arbiter_context
-                )
-            except Exception as error:
-                invalid_json = _is_invalid_llm_json(error)
-                if not (_is_transient_quota_error(error) or invalid_json):
-                    raise
-                # Provider failures and malformed responses must not discard the
-                # whole run. Unknown decisions are routed to the arbiter/fail-open.
-                error_kind = (
-                    "invalid_llm_json" if invalid_json else "transient_llm_error"
-                )
-                return _VerificationResult(
-                    job=job,
-                    decisions={},
-                    positive_raw={},
-                    missing_pairs=list(job.target_list),
-                    invalid_rows=[f"{error_kind}:{str(error)[:300]}"],
-                )
+            return _run_verification_job_with_retry(
+                job, pdf_path, pdf_bytes, model, pair_examples, arbiter_context
+            )
 
         all_results.extend(
             run_parallel(
@@ -542,6 +635,9 @@ def _result_audit_rows(results: Sequence[_VerificationResult]) -> List[Dict[str,
                     f"{disc}|{chap}" for disc, chap in result.missing_pairs
                 ],
                 "invalid_rows": result.invalid_rows,
+                "attempts": result.attempts,
+                "job_status": result.job_status,
+                "retry_log": result.retry_log,
             }
         )
     return rows

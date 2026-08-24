@@ -61,6 +61,7 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
     set_key("SCOPE_PASS2_CHUNK_ENABLED", pass2.get("chunk_enabled", False))
     set_key("SCOPE_PASS2_CHUNK_PAGES", pass2.get("chunk_pages", 10))
     set_key("SCOPE_PASS2_CHUNK_OVERLAP", pass2.get("chunk_overlap", 1))
+    set_key("SCOPE_PASS2_JOB_MAX_ATTEMPTS", pass2.get("job_max_attempts", 3))
 
     providers = data.get("providers") or {}
     openai = providers.get("openai") or {}
@@ -104,12 +105,6 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
         ),
     )
     set_key("TITLE_ENRICHMENT_MAX_EXAMPLES", title_enrichment.get("max_examples", 10))
-    # Off di default: ogni run deve rispecchiare lo SoW caricato ora. Il riuso
-    # e' un acceleratore per i test, e comunque decade se lo SoW cambia.
-    set_key(
-        "TITLE_ENRICHMENT_REUSE_PREVIOUS",
-        title_enrichment.get("reuse_previous_run", False),
-    )
     set_key(
         "TITLE_ENRICHMENT_GENERIC_FILTER",
         title_enrichment.get("generic_filter", True),
@@ -128,10 +123,6 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
     set_key(
         "SOW_MANDATORY_MIN_MATCH_SCORE",
         sow_mandatory.get("min_match_score", 0.6),
-    )
-    set_key(
-        "SOW_MANDATORY_REUSE_PREVIOUS",
-        sow_mandatory.get("reuse_previous_run", False),
     )
     # Warning-only per default: i documenti obbligatori mancanti non fermano la run.
     set_key(

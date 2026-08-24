@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import tempfile
 import unittest
@@ -223,9 +224,94 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].decisions, {})
         self.assertEqual(results[0].missing_pairs, [self.a])
+        self.assertEqual(_run.call_count, 3)
+        self.assertEqual(results[0].attempts, 3)
+        self.assertEqual(results[0].job_status, "transient_llm_error")
         self.assertTrue(
             results[0].invalid_rows[0].startswith("transient_llm_error:")
         )
+
+    @patch.object(consensus, "run_parallel",
+        side_effect=lambda jobs, fn, **_kwargs: [fn(job) for job in jobs],
+    )
+    @patch.object(consensus, "chunk_page_ranges", return_value=[(1, 1)])
+    @patch.object(consensus, "pdf_page_count", return_value=1)
+    @patch.object(consensus, "read_scope_pdf_bytes", return_value=b"pdf")
+    def test_incomplete_pairs_retry_until_complete(
+        self, _read, _count, _ranges, _parallel
+    ):
+        calls = {"n": 0}
+
+        def fake_job(job, *_args, **_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _result(list(job.target_list), {self.a: False})
+            return _result(
+                list(job.target_list), {self.a: False, self.b: False}
+            )
+
+        with patch.object(consensus, "_run_verification_job", side_effect=fake_job):
+            results = _scan_catalog(
+                [Path("scope.pdf")],
+                [[self.a, self.b]],
+                "claude-sonnet-4-6",
+                {},
+                tie_break=False,
+            )
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(results[0].job_status, "ok")
+        self.assertEqual(results[0].attempts, 2)
+        self.assertEqual(results[0].decisions, {self.a: False, self.b: False})
+        self.assertEqual(results[0].missing_pairs, [])
+
+    @patch.object(consensus, "run_parallel",
+        side_effect=lambda jobs, fn, **_kwargs: [fn(job) for job in jobs],
+    )
+    @patch.object(consensus, "chunk_page_ranges", return_value=[(1, 1)])
+    @patch.object(consensus, "pdf_page_count", return_value=1)
+    @patch.object(consensus, "read_scope_pdf_bytes", return_value=b"pdf")
+    def test_incomplete_exhausted_keeps_partial_decisions(
+        self, _read, _count, _ranges, _parallel
+    ):
+        def fake_job(job, *_args, **_kwargs):
+            return _result(list(job.target_list), {self.a: False})
+
+        with patch.object(consensus, "_run_verification_job", side_effect=fake_job):
+            results = _scan_catalog(
+                [Path("scope.pdf")],
+                [[self.a, self.b]],
+                "claude-sonnet-4-6",
+                {},
+                tie_break=False,
+            )
+        self.assertEqual(results[0].attempts, 3)
+        self.assertEqual(results[0].job_status, "incomplete_pairs")
+        self.assertEqual(results[0].decisions, {self.a: False})
+        self.assertEqual(results[0].missing_pairs, [self.b])
+
+    @patch.object(consensus, "_run_verification_job",
+        side_effect=json.JSONDecodeError("bad", "doc", 0),
+    )
+    @patch.object(consensus, "run_parallel",
+        side_effect=lambda jobs, fn, **_kwargs: [fn(job) for job in jobs],
+    )
+    @patch.object(consensus, "chunk_page_ranges", return_value=[(1, 1)])
+    @patch.object(consensus, "pdf_page_count", return_value=1)
+    @patch.object(consensus, "read_scope_pdf_bytes", return_value=b"pdf")
+    def test_invalid_json_retries_then_stays_empty(
+        self, _read, _count, _ranges, _parallel, _run
+    ):
+        results = _scan_catalog(
+            [Path("scope.pdf")],
+            [[self.a]],
+            "claude-sonnet-4-6",
+            {},
+            tie_break=False,
+        )
+        self.assertEqual(_run.call_count, 3)
+        self.assertEqual(results[0].job_status, "invalid_llm_json")
+        self.assertEqual(results[0].decisions, {})
+        self.assertEqual(results[0].missing_pairs, [self.a])
 
     @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
     @patch.object(consensus, "_scan_catalog")
@@ -447,9 +533,15 @@ class ScopeStabilityTests(unittest.TestCase):
         self.assertEqual(final_pairs, {self.a})
         self.assertEqual(audit["fallback_count"], 1)
 
+    @patch.object(
+        consensus, "cfg",
+        side_effect=lambda key, default="": (
+            "gemini-2.5-pro" if key == "SCOPE_PASS2_ARBITER_LLM_MODEL" else default
+        ),
+    )
     @patch.object(consensus, "_fetch_catalog_pair_examples", return_value={})
     @patch.object(consensus, "_scan_catalog")
-    def test_sonnet_pass2_and_gemini_arbiter(self, scan, _examples):
+    def test_sonnet_pass2_and_gemini_arbiter(self, scan, _examples, _cfg):
         verification = _result(
             [self.a, self.b, self.c],
             {self.a: True, self.b: True, self.c: True},
@@ -492,7 +584,11 @@ class ScopeStabilityTests(unittest.TestCase):
 
         def fake_job(job, *_args, **_kwargs):
             seen.append((job.page_start, job.page_end))
-            return _result(list(job.target_list), {}, tie_break=job.tie_break)
+            return _result(
+                list(job.target_list),
+                {pair: False for pair in job.target_list},
+                tie_break=job.tie_break,
+            )
 
         with patch.object(consensus, "_run_verification_job", side_effect=fake_job):
             _scan_catalog(
