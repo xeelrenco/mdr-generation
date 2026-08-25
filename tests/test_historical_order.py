@@ -1,4 +1,4 @@
-"""Historical MATCH prior is a Step 12 row-order concern, not a scope step."""
+"""Historical MATCH prior is a Step 10 row-order concern, not a scope step."""
 
 from __future__ import annotations
 

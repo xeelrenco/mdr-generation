@@ -1,4 +1,4 @@
-"""Step 12b: Convert timeline duration (days) to man-hours for column X."""
+"""Step 10b: Convert timeline duration (days) to man-hours for column X."""
 
 from __future__ import annotations
 

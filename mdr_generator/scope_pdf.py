@@ -309,10 +309,10 @@ def _openai_supports_custom_temperature(model: str) -> bool:
     return not m.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
-# Stage che devono essere il più riproducibili possibile: catalogo (pass3) e
-# titoli SoW (pass10, stabilità suffissi tra run). Best-effort: i provider che
+# Stage che devono essere il più riproducibili possibile: catalogo (pass3),
+# esclusioni titolo (pass4), titoli SoW (pass10). Best-effort: i provider che
 # non accettano temperature custom restano al default.
-_DETERMINISTIC_STAGE_PREFIXES = ("pass3_catalog_", "pass10_")
+_DETERMINISTIC_STAGE_PREFIXES = ("pass3_catalog_", "pass4_", "pass10_")
 
 
 def stage_temperature(stage: str) -> float:

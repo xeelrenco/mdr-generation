@@ -1,4 +1,4 @@
-"""Step 15: Report qualità generazione MDR (leggibile, in italiano)."""
+"""Step 13: Report qualità generazione MDR (leggibile, in italiano)."""
 
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ def _build_gap_analysis_rows(
         [
             "Coppie gap estratte ma con 0 documenti",
             pairs_scope_no_output,
-            "Tutti i candidati rimossi da Step 4/7",
+            "Tutti i candidati rimossi dallo Step 4",
         ],
         [
             "Coppie gap ancora fuori scope",
@@ -225,8 +225,8 @@ def write_qa_report(
         (
             "Esclusioni_SoW",
             "",
-            "Ambiti committente/fuori scope (Step 4), pair/documenti rimossi e "
-            "documenti senza base nello SoW (Step 7).",
+            "Ambiti committente/fuori scope (Step 4 passata A), pair/documenti rimossi e "
+            "documenti senza base nello SoW (Step 4 passata B).",
         ),
         (
             "MDR_generato",
@@ -356,9 +356,9 @@ def write_qa_report(
             "Disciplina+capitolo presenti in catalogo (dopo Step 4)",
         ],
         [
-            "4. Ambiti esclusi SoW",
+            "4a. Documenti esclusi SoW",
             summary.scope_exclusions_active,
-            "Committente / fuori scope con evidence",
+            "Passata A: voto drop_client_doc / drop_not_in_project sui TitleKey",
         ],
         [
             "   — coppie rimosse",
@@ -368,27 +368,27 @@ def write_qa_report(
         [
             "   — documenti rimossi",
             summary.scope_docs_dropped,
-            "TitleKey candidati esclusi per package SoW",
+            "TitleKey candidati esclusi dalla passata A",
         ],
         [
             "   — documenti segnalati, non applicati",
             summary.scope_docs_flagged,
             (
-                "Circuit breaker Step 4 scattato"
+                "Circuit breaker Step 4A scattato"
                 if summary.scope_exclusion_guard_triggered
                 else "—"
             ),
         ],
         [
-            "7. Doc senza base nello SoW",
+            "4b. Doc senza base nello SoW",
             summary.sow_basis_docs_dropped,
-            "Temi non previsti dal progetto (gate generalista)",
+            "Passata B: temi non previsti dal progetto (gate catalogo)",
         ],
         [
-            "   — 7 segnalati, non applicati",
+            "   — 4b segnalati, non applicati",
             summary.sow_basis_docs_flagged,
             (
-                "Circuit breaker Step 7 scattato"
+                "Circuit breaker Step 4B scattato"
                 if summary.sow_basis_guard_triggered
                 else "—"
             ),
@@ -396,23 +396,23 @@ def write_qa_report(
         [
             "3. Candidati prima delle esclusioni",
             summary.candidates_before_exclusions,
-            "Catalogo dalle coppie scope prima di 4/7",
+            "Catalogo dalle coppie scope prima dello Step 4",
         ],
         [
-            "6. Candidati dopo Step 4",
+            "4. Candidati dopo passata A",
             summary.candidates_after_2d,
-            "Dopo i quattro livelli di esclusione",
+            "Dopo esclusioni Cliente/divieti, prima della passata B",
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
         [
-            "8. Decisioni document scope",
+            "6. Decisioni document scope",
             summary.document_scope_decisions,
             "Pass LLM per coppia (in scope / istanze)",
         ],
         [
-            "9. Title enrichment (SoW)",
+            "7. Title enrichment (SoW)",
             "Sì" if summary.title_enrichment_enabled else "No",
-            "Suffissi SoW sulle copie dello Step 8 (non cambia N)",
+            "Suffissi SoW sulle copie dello Step 6 (non cambia N)",
         ],
         [
             "   — doc con titolo SoW",
@@ -420,15 +420,15 @@ def write_qa_report(
             "Documenti con almeno un sow_specific_title",
         ],
         [
-            "   — righe extra vs Step 8",
+            "   — righe extra vs Step 6",
             summary.title_enrichment_extra_rows if summary.title_enrichment_enabled else "—",
-            "Righe MDR oltre il conteggio post-8",
+            "Righe MDR oltre il conteggio post-6",
         ],
         ["4. Righe MDR finali", summary.mdr_line_items or summary.selected_count, "Output Excel MDR"],
         [
             "   — durata timeline popolata",
             summary.duration_populated_count,
-            "Giorni calendario (Finish−Start) da v_TimelineTaskToMdrLinks_Dates; usata per Step 12 schedule",
+            "Giorni calendario (Finish−Start) da v_TimelineTaskToMdrLinks_Dates; usata per Step 10 schedule",
         ],
         [
             "   — MANHOURS popolati",
@@ -678,72 +678,27 @@ def write_qa_report(
     # --- Foglio 3b: Esclusioni_SoW (Step 4) ---
     ws = wb.create_sheet("Esclusioni_SoW")
     excl_audit = exclusion_audit or {}
-    row = _write_section_title(ws, 1, "Ambiti esclusi dallo SoW (Step 4)")
-    excl_items = excl_audit.get("exclusions") or []
-    if excl_items:
-        package_rows = [
+    row = _write_section_title(ws, 1, "Voti Step 4A (keep / drop_client_doc / drop_not_in_project)")
+    vote_items = excl_audit.get("votes") or []
+    if vote_items:
+        vote_rows = [
             [
-                e.get("label", e.get("package", "")),
-                e.get("exclude_level", ""),
-                e.get("application_status", ""),
-                e.get("responsibility", ""),
-                "Sì" if e.get("explicit_assuntore") else "No",
-                e.get("exclusion_type", ""),
-                ",".join(e.get("discipline_codes") or e.get("suggested_discipline_codes") or []),
-                "; ".join(e.get("chapter_names") or []),
-                "; ".join(
-                    f"{p.get('discipline_code')}|{p.get('chapter_name')}"
-                    for p in (e.get("pairs") or [])
-                    if isinstance(p, dict)
-                ),
-                "Sì" if e.get("should_exclude") else "No",
-                e.get("confidence", ""),
+                e.get("title_key", ""),
+                e.get("vote", ""),
                 "; ".join(e.get("parse_warnings") or []),
                 (e.get("evidence_quote") or "")[:300],
-                "; ".join(e.get("source_pdfs") or [e.get("source_pdf", "")]),
+                "; ".join(e.get("source_pdfs") or []),
             ]
-            for e in excl_items
+            for e in vote_items
         ]
     else:
-        package_rows = [
-            [
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
-                "Nessuna esclusione trovata",
-                "—",
-            ]
-        ]
+        vote_rows = [["—", "—", "—", "Nessun voto", "—"]]
     row = _write_table(
         ws,
         row,
-        [
-            "Label",
-            "Livello",
-            "Stato applicazione",
-            "Responsabilità",
-            "Assuntore esplicito",
-            "Tipo",
-            "Discipline",
-            "Chapter names",
-            "Pair RACI",
-            "Attiva",
-            "Conf.",
-            "Warning",
-            "Evidence",
-            "PDF",
-        ],
-        package_rows,
-        [22, 12, 20, 14, 14, 18, 14, 28, 36, 8, 8, 38, 40, 22],
+        ["TitleKey", "Voto", "Warning", "Evidence", "PDF"],
+        vote_rows,
+        [36, 22, 36, 40, 22],
     )
     row += 1
     row = _write_section_title(ws, row, "Coppie rimosse")
@@ -753,21 +708,19 @@ def write_qa_report(
             [
                 d.get("discipline_code", ""),
                 d.get("chapter_name", ""),
-                d.get("exclude_level", ""),
-                d.get("label", d.get("package", "")),
                 d.get("reason", ""),
                 (d.get("evidence_quote") or "")[:250],
             ]
             for d in dropped_pairs
         ]
     else:
-        pair_rows = [["—", "—", "—", "—", "Nessuna coppia rimossa", "—"]]
+        pair_rows = [["—", "—", "Nessuna coppia rimossa", "—"]]
     row = _write_table(
         ws,
         row,
-        ["Disciplina", "Capitolo", "Livello", "Label", "Motivo", "Evidence"],
+        ["Disciplina", "Capitolo", "Motivo", "Evidence"],
         pair_rows,
-        [12, 36, 12, 22, 22, 40],
+        [12, 36, 36, 40],
     )
     row += 1
     row = _write_section_title(ws, row, "Documenti RACI rimossi")
@@ -779,26 +732,25 @@ def write_qa_report(
                 d.get("chapter_name", ""),
                 d.get("title", ""),
                 d.get("title_key", ""),
-                d.get("exclude_level", ""),
-                d.get("label", d.get("package", "")),
                 d.get("reason", ""),
+                (d.get("evidence_quote") or "")[:250],
             ]
             for d in dropped_docs
         ]
     else:
-        doc_rows = [["—", "—", "—", "—", "—", "—", "Nessun documento rimosso"]]
+        doc_rows = [["—", "—", "—", "—", "Nessun documento rimosso", "—"]]
     row = _write_table(
         ws,
         row,
-        ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Livello", "Label", "Motivo"],
+        ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Motivo", "Evidence"],
         doc_rows,
-        [12, 28, 40, 28, 12, 18, 22],
+        [12, 28, 40, 28, 22, 40],
     )
 
     if excl_audit.get("drop_guard_triggered"):
         row += 1
         row = _write_section_title(
-            ws, row, "Step 4 segnalati ma non applicati (circuit breaker)"
+            ws, row, "Step 4A segnalati ma non applicati (circuit breaker)"
         )
         flagged_docs = excl_audit.get("flagged_documents") or []
         flagged_rows = [
@@ -807,18 +759,17 @@ def write_qa_report(
                 d.get("chapter_name", ""),
                 d.get("title", ""),
                 d.get("title_key", ""),
-                d.get("exclude_level", ""),
-                d.get("label", ""),
-                d.get("llm_reason", d.get("reason", "")),
+                d.get("reason", ""),
+                (d.get("evidence_quote") or "")[:250],
             ]
             for d in flagged_docs
-        ] or [["—", "—", "—", "—", "—", "—", "Nessun dettaglio"]]
+        ] or [["—", "—", "—", "—", "—", "Nessun dettaglio"]]
         row = _write_table(
             ws,
             row,
-            ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Livello", "Label", "Motivo"],
+            ["Disciplina", "Capitolo", "Titolo", "TitleKey", "Motivo", "Evidence"],
             flagged_rows,
-            [12, 28, 40, 28, 12, 18, 30],
+            [12, 28, 40, 28, 22, 40],
         )
 
     doc_llm_rows = excl_audit.get("document_llm_audit") or []
@@ -826,27 +777,27 @@ def write_qa_report(
         [
             item.get("title_key", ""),
             item.get("outcome", ""),
-            item.get("exclusion_label", ""),
             item.get("source_pdf", ""),
-            str(item.get("raw", ""))[:300],
+            str(item.get("error") or item.get("raw") or "")[:300],
         ]
         for item in doc_llm_rows
-        if item.get("outcome") != "excluded"
+        if item.get("outcome")
+        in ("invalid_title_key", "title_key_outside_chunk", "transient_error_fail_open")
     ]
     if invalid_doc_rows:
         row += 1
-        row = _write_section_title(ws, row, "Audit mapping document-level")
+        row = _write_section_title(ws, row, "Audit voti non applicati")
         row = _write_table(
             ws,
             row,
-            ["TitleKey", "Esito", "Esclusione", "PDF", "Raw"],
+            ["TitleKey", "Esito", "PDF", "Dettaglio"],
             invalid_doc_rows,
-            [30, 20, 28, 24, 50],
+            [30, 28, 24, 50],
         )
 
     row += 1
     row = _write_section_title(
-        ws, row, "Documenti senza base nello SoW (Step 7)"
+        ws, row, "Documenti senza base nello SoW (Step 4 passata B)"
     )
     gate_audit = basis_gate_audit or {}
     gate_docs = gate_audit.get("dropped_documents") or []

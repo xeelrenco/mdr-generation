@@ -1,4 +1,4 @@
-"""Step 9: SoW-specific MDR suffixes. Instance counts stay with Step 8."""
+"""Step 7: SoW-specific MDR suffixes. Instance counts stay with Step 6."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def _instances_with_names(
     elements: List[dict],
     count: int,
 ) -> List[DocumentInstanceSpec]:
-    """Map SoW names onto Step 8 instances. Never changes how many rows exist."""
+    """Map SoW names onto Step 6 instances. Never changes how many rows exist."""
     prior = {inst.index: inst for inst in dec.instances}
     if len(elements) == 1 and count > 1:
         el = elements[0]
@@ -232,7 +232,7 @@ def _apply_elements_to_decision(
             return replace(dec, qa_flags=qa_flags), audit
         return dec, audit
 
-    # Step 8 owns N for scalable docs. Step 9 only names existing instances.
+    # Step 6 owns N for scalable docs. Step 7 only names existing instances.
     keep_count = count_before if dec.scalable else 1
     if len(working) > keep_count:
         audit["elements_unused"] = len(working) - keep_count
@@ -581,7 +581,7 @@ def run_title_enrichment_pass(
             jobs,
             _job_fn,
             max_workers=workers,
-            label="9 Title enrichment",
+            label="7 Title enrichment",
             describe=_desc,
             result_note=_note,
         )

@@ -300,7 +300,7 @@ class GenericSuffixTests(unittest.TestCase):
         )
         self.assertTrue(audit["generic_all"])
         self.assertIn("sow_all_elements_generic", updated.qa_flags)
-        # count di Step 8 conservato, niente nuove righe su suffissi generici
+        # count di Step 6 conservato, niente nuove righe su suffissi generici
         self.assertEqual(updated.instance_count, 3)
 
     def test_single_generic_element_is_warned_not_dropped(self) -> None:

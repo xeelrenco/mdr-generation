@@ -7,11 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mdr_generator.models import NormalizedSignal, PipelineSummary, RaciCandidate
-from mdr_generator.raci_vocabulary import (
-    RaciVocabulary,
-    build_document_exclusion_prompt,
-    build_scope_exclusion_prompt,
-)
+from mdr_generator.raci_vocabulary import build_title_exclusion_prompt
 
 
 exclusions = importlib.import_module("mdr_generator.4_scope_exclusions")
@@ -42,225 +38,164 @@ def _signal(discipline: str, chapter: str) -> NormalizedSignal:
     )
 
 
+def _vote(key: str, vote: str, quote: str = "") -> exclusions.TitleExclusionVote:
+    return exclusions.TitleExclusionVote(
+        title_key=key,
+        vote=vote,
+        evidence_quote=quote,
+    )
+
+
 class ScopeExclusionTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.vocab = RaciVocabulary(
-            discipline_codes={"CIV", "ELE", "ICT"},
-            discipline_names={"CIV": "Civil", "ELE": "Electrical", "ICT": "Instrument"},
-            chapter_names={"FOUNDATIONS", "COMMON", "LIGHTING"},
-            canonical_pairs={
-                ("CIV", "FOUNDATIONS"),
-                ("CIV", "COMMON"),
-                ("ELE", "COMMON"),
-                ("ELE", "LIGHTING"),
-                ("ICT", "COMMON"),
-            },
-        )
-
-    @staticmethod
-    def _base(**overrides):
-        value = {
-            "label": "test exclusion",
-            "responsibility": "committente",
-            "explicit_assuntore": False,
-            "exclusion_type": "client_responsibility",
-            "confidence": "strong",
-            "source_pages": [2],
-            "evidence_quote": "a carico della Committente",
-        }
-        value.update(overrides)
-        return value
-
-    def _parse(self, *items, schema_version=2):
-        return exclusions._parse_exclusions(
-            {"schema_version": schema_version, "exclusions": list(items)},
-            source_pdf="scope.pdf",
-            vocab=self.vocab,
-        )
-
-    def test_all_four_levels_filter_expected_targets(self):
-        parsed = self._parse(
-            self._base(
-                label="discipline",
-                exclude_level="discipline",
-                discipline_codes=["ICT"],
-            ),
-            self._base(
-                label="chapter",
-                exclude_level="chapter",
-                chapter_names=["COMMON"],
-            ),
-            self._base(
-                label="pair",
-                exclude_level="pair",
-                pairs=[{"discipline_code": "ELE", "chapter_name": "LIGHTING"}],
-            ),
-            self._base(label="document", exclude_level="document"),
-        )
-        kept, dropped = exclusions.filter_normalized_by_exclusions(
-            [
-                _signal("CIV", "FOUNDATIONS"),
-                _signal("CIV", "COMMON"),
-                _signal("ELE", "COMMON"),
-                _signal("ELE", "LIGHTING"),
-                _signal("ICT", "COMMON"),
-            ],
-            parsed,
+    def test_client_execution_keeps_engineering_drops_client_doc(self):
+        kept_n, kept_c, dropped_pairs, dropped_docs = (
+            exclusions.apply_title_exclusion_votes(
+                [_signal("CIV", "FOUNDATIONS"), _signal("ELE", "COMMON")],
+                [
+                    _candidate("foundation loads", "CIV", "FOUNDATIONS"),
+                    _candidate("cable layout", "ELE", "COMMON"),
+                    _candidate("piping class", "ELE", "COMMON"),
+                ],
+                {
+                    "foundation loads": _vote("foundation loads", "keep"),
+                    "cable layout": _vote("cable layout", "keep"),
+                    "piping class": _vote(
+                        "piping class", "drop_client_doc", "classi a carico Cliente"
+                    ),
+                },
+            )
         )
         self.assertEqual(
-            [(item.discipline_code, item.chapter_name) for item in kept],
+            [(item.discipline_code, item.chapter_name) for item in kept_n],
+            [("CIV", "FOUNDATIONS"), ("ELE", "COMMON")],
+        )
+        self.assertEqual(
+            [c.title_key for c in kept_c], ["foundation loads", "cable layout"]
+        )
+        self.assertEqual(dropped_pairs, [])
+        self.assertEqual(dropped_docs[0]["reason"], "drop_client_doc")
+
+    def test_all_not_in_project_wipes_pair(self):
+        kept_n, kept_c, dropped_pairs, dropped_docs = (
+            exclusions.apply_title_exclusion_votes(
+                [_signal("ELE", "LIGHTING"), _signal("CIV", "FOUNDATIONS")],
+                [
+                    _candidate("lighting layout", "ELE", "LIGHTING"),
+                    _candidate("lighting calc", "ELE", "LIGHTING"),
+                    _candidate("foundation loads", "CIV", "FOUNDATIONS"),
+                ],
+                {
+                    "lighting layout": _vote("lighting layout", "drop_not_in_project"),
+                    "lighting calc": _vote("lighting calc", "drop_not_in_project"),
+                    "foundation loads": _vote("foundation loads", "keep"),
+                },
+            )
+        )
+        self.assertEqual(
+            [(item.discipline_code, item.chapter_name) for item in kept_n],
             [("CIV", "FOUNDATIONS")],
         )
-        self.assertEqual(
-            {row["reason"] for row in dropped},
-            {"excluded_discipline", "excluded_chapter", "excluded_pair"},
-        )
+        self.assertEqual([c.title_key for c in kept_c], ["foundation loads"])
+        self.assertEqual(dropped_pairs[0]["reason"], "excluded_pair_not_in_project")
+        self.assertEqual(len(dropped_docs), 2)
 
-    def test_partial_broad_exclusion_is_forced_to_document(self):
-        item = self._parse(
-            self._base(
-                exclude_level="pair",
-                pairs=[{"discipline_code": "CIV", "chapter_name": "FOUNDATIONS"}],
-                retained_deliverables=["foundation loads", "foundation layout"],
+    def test_all_client_docs_wipe_pair_without_remaining_titles(self):
+        kept_n, kept_c, dropped_pairs, dropped_docs = (
+            exclusions.apply_title_exclusion_votes(
+                [_signal("ELE", "COMMON")],
+                [_candidate("piping class", "ELE", "COMMON")],
+                {"piping class": _vote("piping class", "drop_client_doc")},
             )
-        )[0]
-        self.assertEqual(item.exclude_level, "document")
-        self.assertTrue(item.should_exclude())
-        kept, dropped = exclusions.filter_normalized_by_exclusions(
-            [_signal("CIV", "FOUNDATIONS")], [item]
         )
-        self.assertEqual(len(kept), 1)
-        self.assertEqual(dropped, [])
+        self.assertEqual(kept_n, [])
+        self.assertEqual(kept_c, [])
+        self.assertEqual(
+            dropped_pairs[0]["reason"], "excluded_pair_no_remaining_documents"
+        )
+        self.assertEqual(len(dropped_docs), 1)
 
-    def test_exclusion_prompt_keeps_client_execution_at_document_level(self):
-        prompt = build_scope_exclusion_prompt(self.vocab)
-        self.assertIn("ONLY pipeline stage that decides exclusions", prompt)
-        self.assertIn("ALWAYS exclude_level=\"document\"", prompt)
-        self.assertNotIn(
-            "X is carried out by the Client",
-            prompt,
+    def test_pair_without_votes_is_kept(self):
+        kept_n, kept_c, dropped_pairs, dropped_docs = (
+            exclusions.apply_title_exclusion_votes(
+                [_signal("CIV", "FOUNDATIONS")],
+                [],
+                {},
+            )
         )
-        self.assertIn("Client civil construction is NOT this case", prompt)
-        mapping = build_document_exclusion_prompt(
-            {
-                "label": "civil works",
-                "exclusion_type": "client_responsibility",
-                "responsibility": "committente",
-                "discipline_codes": ["CIV"],
-                "chapter_names": [],
-                "pairs": [],
-                "retained_deliverables": ["foundation loads"],
-                "scope_qualifiers": ["Client civil works"],
-                "source_pages": [6],
-                "evidence_quote": "opere civili a carico della Committente",
-            },
+        self.assertEqual(len(kept_n), 1)
+        self.assertEqual(kept_c, [])
+        self.assertEqual(dropped_pairs, [])
+        self.assertEqual(dropped_docs, [])
+
+    def test_keep_wins_over_drop_across_pdfs(self):
+        self.assertEqual(
+            exclusions._merge_vote_values(
+                ["drop_client_doc", "keep", "drop_not_in_project"]
+            ),
+            "keep",
+        )
+        self.assertEqual(
+            exclusions._merge_vote_values(
+                ["drop_not_in_project", "drop_client_doc"]
+            ),
+            "drop_client_doc",
+        )
+
+    def test_exclusion_prompt_splits_execution_from_documentation(self):
+        prompt = build_title_exclusion_prompt(
+            "CIV",
+            "FOUNDATIONS",
             "- foundation loads | FOUNDATION LOADS | CIV | FOUNDATIONS",
         )
-        self.assertIn("Client execution", mapping)
-        self.assertIn("Client-provided documentation", mapping)
+        self.assertIn("ONLY pipeline stage that decides exclusions", prompt)
+        self.assertIn("vote keep on those engineering documents", prompt)
+        self.assertIn("drop_client_doc", prompt)
+        self.assertIn("drop_not_in_project", prompt)
+        self.assertIn("Client EXECUTES work", prompt)
+        self.assertIn("Default is keep", prompt)
+        self.assertIn("HARD NO for drop_not_in_project", prompt)
+        self.assertIn("ASSUNTORE", prompt)
+        self.assertIn("vote keep", prompt)
+        self.assertNotIn("exclude_level", prompt)
+        self.assertNotIn('"label"', prompt)
 
-    def test_contradictory_assuntore_payload_is_inactive(self):
-        item = self._parse(
-            self._base(
-                responsibility="assuntore",
-                exclusion_type="client_responsibility",
-                exclude_level="discipline",
-                discipline_codes=["CIV"],
-            )
-        )[0]
-        self.assertEqual(item.application_status, "inactive_conflict")
-        self.assertFalse(item.should_exclude())
-
-    def test_string_false_is_not_accepted_as_boolean(self):
-        item = self._parse(
-            self._base(explicit_assuntore="false", exclude_level="document")
-        )[0]
-        self.assertEqual(item.application_status, "inactive_invalid_payload")
-        self.assertFalse(item.should_exclude())
-
-    def test_invalid_pair_is_not_downgraded_to_document(self):
-        item = self._parse(
-            self._base(
-                exclude_level="pair",
-                pairs=[{"discipline_code": "ELE", "chapter_name": "UNKNOWN"}],
-            )
-        )[0]
-        self.assertEqual(item.exclude_level, "pair")
-        self.assertEqual(item.application_status, "invalid_catalog_entity")
-        self.assertFalse(item.should_exclude())
-
-    def test_weak_exclusion_is_audit_only(self):
-        item = self._parse(
-            self._base(
-                confidence="weak",
-                exclude_level="discipline",
-                discipline_codes=["CIV"],
-            )
-        )[0]
-        self.assertEqual(item.application_status, "inactive_weak")
-        self.assertFalse(item.should_exclude())
-
-    def test_legacy_chapter_with_pairs_is_interpreted_as_pair(self):
-        item = self._parse(
-            self._base(
-                exclude_level="chapter",
-                pairs=[{"discipline_code": "ELE", "chapter_name": "LIGHTING"}],
-            ),
-            schema_version=1,
-        )[0]
-        self.assertEqual(item.exclude_level, "pair")
-
-    def test_multi_source_assuntore_veto_and_narrowest_level(self):
-        active_pair = self._parse(
-            self._base(
-                label="foundation works",
-                exclude_level="pair",
-                pairs=[{"discipline_code": "CIV", "chapter_name": "FOUNDATIONS"}],
-            )
-        )[0]
-        broad = self._parse(
-            self._base(
-                label="foundation works",
-                exclude_level="discipline",
-                discipline_codes=["CIV"],
-            )
-        )[0]
-        contractor = self._parse(
-            self._base(
-                label="foundation works",
-                exclude_level="pair",
-                pairs=[{"discipline_code": "CIV", "chapter_name": "FOUNDATIONS"}],
-                responsibility="assuntore",
-            )
-        )[0]
-        consolidated = exclusions._dedupe_exclusions(
-            [active_pair, broad, contractor]
-        )
-        self.assertTrue(consolidated)
-        self.assertTrue(
-            all(item.application_status == "inactive_conflict" for item in consolidated)
-        )
-
-    def test_2d_mass_drop_guard_is_fail_open(self):
+    def test_mass_drop_guard_is_fail_open(self):
+        votes = {
+            "a": _vote("a", "drop_client_doc"),
+            "b": _vote("b", "drop_client_doc"),
+            "c": _vote("c", "keep"),
+        }
         candidates = [
             _candidate("a", "ELE", "COMMON"),
             _candidate("b", "ELE", "COMMON"),
             _candidate("c", "CIV", "FOUNDATIONS"),
         ]
-        item = self._parse(
-            self._base(
-                exclude_level="discipline",
-                discipline_codes=["ELE"],
-            )
-        )[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            kept, audit = exclusions.apply_document_exclusions(
-                candidates,
-                [item],
-                [],
-                Path(tmp),
-            )
-        self.assertEqual(len(kept), len(candidates))
+        normalized = [_signal("ELE", "COMMON"), _signal("CIV", "FOUNDATIONS")]
+        filtered_n, filtered_c, dropped_pairs, dropped_docs = (
+            exclusions.apply_title_exclusion_votes(normalized, candidates, votes)
+        )
+        audit = exclusions._build_audit(
+            normalized_before=normalized,
+            candidates_before=candidates,
+            filtered_normalized=filtered_n,
+            filtered_candidates=filtered_c,
+            dropped_pairs=dropped_pairs,
+            dropped_docs=dropped_docs,
+            votes=votes,
+            llm_audit=[],
+            transient_errors=[],
+        )
+        restored_n, restored_c, audit = exclusions._apply_drop_guard(
+            audit,
+            normalized,
+            candidates,
+            filtered_n,
+            filtered_c,
+            dropped_pairs,
+            dropped_docs,
+        )
+        self.assertEqual(restored_c, candidates)
+        self.assertEqual(restored_n, normalized)
         self.assertTrue(audit["drop_guard_triggered"])
         self.assertEqual(audit["documents_dropped"], 0)
         self.assertEqual(audit["documents_flagged"], 2)
@@ -297,29 +232,29 @@ class ScopeExclusionTests(unittest.TestCase):
         self.assertIn("cumulative_drop_ratio", audit["guard_reasons"])
         self.assertEqual(len(audit["flagged_documents"]), 1)
 
-    def test_2d_transient_error_is_fail_open_and_audited(self):
+    def test_transient_error_is_fail_open_and_audited(self):
         normalized = [_signal("CIV", "FOUNDATIONS")]
+        candidates = [_candidate("a", "CIV", "FOUNDATIONS")]
         with tempfile.TemporaryDirectory() as tmp:
             with (
-                patch.object(exclusions, "_chunk_settings", return_value=(False, 10, 1)),
                 patch.object(exclusions, "read_scope_pdf_bytes", return_value=b"%PDF"),
-                patch.object(exclusions, "pdf_page_count", return_value=2),
                 patch.object(
                     exclusions,
                     "call_scope_llm_pdf",
                     side_effect=RuntimeError("429 RESOURCE_EXHAUSTED"),
                 ),
             ):
-                kept, found, audit = exclusions.run_scope_exclusion_pass(
+                kept_n, kept_c, audit = exclusions.run_scope_exclusion_pass(
                     [Path("scope.pdf")],
                     normalized,
+                    candidates,
                     Path(tmp),
-                    self.vocab,
                 )
-        self.assertEqual(kept, normalized)
-        self.assertEqual(found, [])
+        self.assertEqual(kept_n, normalized)
+        self.assertEqual(kept_c, candidates)
         self.assertEqual(audit["transient_error_count"], 1)
         self.assertEqual(audit["pairs_dropped"], 0)
+        self.assertEqual(audit["documents_dropped"], 0)
 
     def test_3e_transient_error_is_fail_open_and_audited(self):
         candidates = [
@@ -344,34 +279,41 @@ class ScopeExclusionTests(unittest.TestCase):
         self.assertEqual(audit["transient_error_count"], 1)
         self.assertEqual(audit["documents_dropped"], 0)
 
-    def test_2d_document_mapping_transient_error_is_fail_open(self):
-        candidates = [_candidate("a", "CIV", "FOUNDATIONS")]
-        exclusion = self._parse(
-            self._base(
-                exclude_level="document",
-                discipline_codes=["CIV"],
-            )
-        )[0]
+    def test_omitted_title_fails_open_to_keep(self):
+        candidates = [
+            _candidate("a", "CIV", "FOUNDATIONS"),
+            _candidate("b", "CIV", "FOUNDATIONS"),
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 patch.object(exclusions, "read_scope_pdf_bytes", return_value=b"%PDF"),
                 patch.object(
                     exclusions,
                     "call_scope_llm_pdf",
-                    side_effect=RuntimeError("503 service unavailable"),
+                    return_value={
+                        "documents": [
+                            {"title_key": "a", "vote": "drop_client_doc"}
+                        ]
+                    },
                 ),
             ):
-                kept, audit = exclusions.apply_document_exclusions(
-                    candidates,
-                    [exclusion],
+                kept_n, kept_c, audit = exclusions.run_scope_exclusion_pass(
                     [Path("scope.pdf")],
+                    [_signal("CIV", "FOUNDATIONS")],
+                    candidates,
                     Path(tmp),
                 )
-        self.assertEqual(kept, candidates)
-        self.assertEqual(audit["document_transient_error_count"], 1)
-        self.assertEqual(audit["transient_error_count"], 1)
+        self.assertEqual([c.title_key for c in kept_c], ["b"])
+        self.assertEqual(audit["by_vote"]["keep"], 1)
+        self.assertEqual(audit["by_vote"]["drop_client_doc"], 1)
+        omitted = [
+            row
+            for row in audit["document_llm_audit"]
+            if row.get("outcome") == "omitted_keep"
+        ]
+        self.assertEqual(omitted[0]["title_key"], "b")
 
-    def test_2d_to_3e_guard_restores_pairs_and_resets_cumulative_count(self):
+    def test_guard_restores_pairs_and_resets_cumulative_count(self):
         normalized_before = [
             _signal("ELE", "COMMON"),
             _signal("CIV", "FOUNDATIONS"),
@@ -382,31 +324,29 @@ class ScopeExclusionTests(unittest.TestCase):
             _candidate("e3", "ELE", "COMMON"),
             _candidate("c1", "CIV", "FOUNDATIONS"),
         ]
-        exclusion = self._parse(
-            self._base(
-                exclude_level="discipline",
-                discipline_codes=["ELE"],
-            )
-        )[0]
-        normalized_after, dropped_pairs = exclusions.filter_normalized_by_exclusions(
-            normalized_before, [exclusion]
-        )
+
+        def fake_call(prompt, _pdf_path, _pdf_bytes, **_kwargs):
+            docs = []
+            for key in ("e1", "e2", "e3"):
+                if f"- {key} |" in prompt:
+                    docs.append({"title_key": key, "vote": "drop_client_doc"})
+            if "- c1 |" in prompt:
+                docs.append({"title_key": "c1", "vote": "keep"})
+            return {"documents": docs}
 
         with tempfile.TemporaryDirectory() as tmp:
-            candidates_after, exclusion_audit = exclusions.apply_document_exclusions(
-                candidates_before,
-                [exclusion],
-                [],
-                Path(tmp),
-                pair_audit={
-                    "pairs_before": 2,
-                    "pairs_after": 1,
-                    "pairs_dropped": len(dropped_pairs),
-                    "dropped_pairs": dropped_pairs,
-                },
-            )
-            if exclusion_audit["drop_guard_triggered"]:
-                normalized_after = normalized_before
+            with (
+                patch.object(exclusions, "read_scope_pdf_bytes", return_value=b"%PDF"),
+                patch.object(exclusions, "call_scope_llm_pdf", side_effect=fake_call),
+            ):
+                normalized_after, candidates_after, exclusion_audit = (
+                    exclusions.run_scope_exclusion_pass(
+                        [Path("scope.pdf")],
+                        normalized_before,
+                        candidates_before,
+                        Path(tmp),
+                    )
+                )
 
             with (
                 patch.object(basis_gate, "read_scope_pdf_bytes", return_value=b"%PDF"),
@@ -463,38 +403,45 @@ class ScopeExclusionTests(unittest.TestCase):
         self.assertEqual(len(set(audit["pdfs"])), 2)
         self.assertEqual(len(audit["dropped_documents"][0]["pdf_votes"]), 2)
 
-    def test_document_mapping_reattaches_pdf_and_retained_context(self):
+    def test_vote_reattaches_pdf_and_pair_titles(self):
         candidates = [_candidate("foundation loads", "CIV", "FOUNDATIONS")]
-        item = self._parse(
-            self._base(
-                exclude_level="pair",
-                pairs=[{"discipline_code": "CIV", "chapter_name": "FOUNDATIONS"}],
-                retained_deliverables=["foundation loads"],
-                scope_qualifiers=["existing foundations"],
-            )
-        )[0]
         calls = []
-        original_read = exclusions.read_scope_pdf_bytes
-        original_call = exclusions.call_scope_llm_pdf
-        try:
-            exclusions.read_scope_pdf_bytes = lambda _path: b"%PDF-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(exclusions, "read_scope_pdf_bytes", return_value=b"%PDF-test"),
+            ):
+                def fake_call(prompt, pdf_path, pdf_bytes, **_kwargs):
+                    calls.append((prompt, pdf_path, pdf_bytes))
+                    return {
+                        "documents": [
+                            {
+                                "title_key": "foundation loads",
+                                "vote": "keep",
+                                "evidence_quote": "carichi fondazioni",
+                            }
+                        ]
+                    }
 
-            def fake_call(prompt, pdf_path, pdf_bytes, **_kwargs):
-                calls.append((prompt, pdf_path, pdf_bytes))
-                return {"excluded_documents": []}
-
-            exclusions.call_scope_llm_pdf = fake_call
-            selected, _audit = exclusions.select_document_title_keys_via_llm(
-                candidates, [item], [Path("scope.pdf")]
-            )
-        finally:
-            exclusions.read_scope_pdf_bytes = original_read
-            exclusions.call_scope_llm_pdf = original_call
-        self.assertEqual(selected, set())
+                with patch.object(exclusions, "call_scope_llm_pdf", side_effect=fake_call):
+                    _n, kept, _audit = exclusions.run_scope_exclusion_pass(
+                        [Path("scope.pdf")],
+                        [_signal("CIV", "FOUNDATIONS")],
+                        candidates,
+                        Path(tmp),
+                    )
+        self.assertEqual([c.title_key for c in kept], ["foundation loads"])
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], Path("scope.pdf"))
+        self.assertEqual(calls[0][2], b"%PDF-test")
         self.assertIn("foundation loads", calls[0][0])
-        self.assertIn("existing foundations", calls[0][0])
+        self.assertIn("CIV | FOUNDATIONS", calls[0][0])
+
+    def test_stage_temperature_is_zero_for_pass4(self):
+        from mdr_generator.scope_pdf import stage_temperature
+
+        self.assertEqual(stage_temperature("pass4_title_exclusions"), 0.0)
+        self.assertEqual(stage_temperature("pass4_scope_exclusions"), 0.0)
+        self.assertEqual(stage_temperature("pass7_sow_basis_gate"), 0.1)
 
     def test_qa_report_renders_guard_metrics(self):
         summary = PipelineSummary(
@@ -531,6 +478,9 @@ class ScopeExclusionTests(unittest.TestCase):
                 exclusion_audit={
                     "drop_guard_triggered": True,
                     "flagged_documents": [],
+                    "votes": [
+                        {"title_key": "a", "vote": "drop_client_doc", "parse_warnings": []}
+                    ],
                 },
                 basis_gate_audit={
                     "discarded_excessive_drop": True,

@@ -1,4 +1,4 @@
-"""Step 12a: Apply timeline duration medians to MDR line items."""
+"""Step 10a: Apply timeline duration medians to MDR line items."""
 
 from __future__ import annotations
 

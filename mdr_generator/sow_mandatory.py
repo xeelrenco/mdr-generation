@@ -1,5 +1,5 @@
 """
-Step 11: documenti che lo SoW obbliga esplicitamente a consegnare (audit).
+Step 9: documenti che lo SoW obbliga esplicitamente a consegnare (audit).
 
 Canale indipendente dal consenso scope. Non partecipa all'ammissione delle coppie
 e non blocca mai la pipeline: produce un audit autoportante (clausola + evidence

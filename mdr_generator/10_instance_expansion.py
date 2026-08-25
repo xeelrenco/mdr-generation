@@ -1,4 +1,4 @@
-"""Step 10: Expand document scope decisions into MDR line items."""
+"""Step 8: Expand document scope decisions into MDR line items."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def expand_scope_to_line_items(
     decisions: List[DocumentScopeDecision],
     candidates: List[RaciCandidate],
 ) -> Tuple[List[MdrLineItem], int]:
-    """Materialize rows. Historical MATCH prior and Excel order are Step 12."""
+    """Materialize rows. Historical MATCH prior and Excel order are Step 10."""
     cand_map: Dict[str, RaciCandidate] = {c.title_key: c for c in candidates}
     line_items: List[MdrLineItem] = []
     seen_keys: Set[str] = set()

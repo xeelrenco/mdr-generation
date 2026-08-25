@@ -1,6 +1,6 @@
 """Historical MATCH prior: annotate MDR rows and optionally order them.
 
-Not a mid-pipeline scope step. Applied at Step 12: always write historical_count
+Not a mid-pipeline scope step. Applied at Step 10: always write historical_count
 for QA; sort by it only when schedule row-order is off.
 """
 

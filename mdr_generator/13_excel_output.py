@@ -1,4 +1,4 @@
-"""Step 14: Build Master Document Register Excel (clean workbook, no template copy)."""
+"""Step 12: Build Master Document Register Excel (clean workbook, no template copy)."""
 
 from __future__ import annotations
 

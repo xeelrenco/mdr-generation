@@ -1,8 +1,8 @@
-"""Step 7: keep a candidate document only if the SoW gives its subject a basis.
+"""Step 4 passata B: keep a candidate document only if the SoW gives its subject a basis.
 
-Generalist counterpart of step 4: step 4 removes what the SoW assigns to the client or
-excludes explicitly, this gate removes catalog documents whose subject never appears in
-the project at all (a chapter can be in scope while some of its documents are not).
+Same user-facing step as passata A (Client vs Contractor / explicit denials).
+This pass removes catalog documents whose subject never appears in the project
+(a chapter can be in scope while some of its documents are not).
 """
 
 from __future__ import annotations
@@ -164,6 +164,7 @@ def run_sow_basis_gate(
             jobs,
             _runner,
             max_workers=audit["parallel_workers"],
+            label="4b Base SoW",
         )
 
     # A document is dropped only when every SoW PDF agrees it has no basis.

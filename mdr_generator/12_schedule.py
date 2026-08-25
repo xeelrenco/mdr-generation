@@ -1,4 +1,4 @@
-"""Step 12: Schedule planning — timeline duration, man-hours, dates, row order."""
+"""Step 10: Schedule planning — timeline duration, man-hours, dates, row order."""
 
 from __future__ import annotations
 
