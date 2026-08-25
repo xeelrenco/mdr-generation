@@ -1,4 +1,4 @@
-"""Step 10: SoW-specific titles and v2 row split via sow_elements[]."""
+"""Step 10: SoW-specific MDR suffixes. Instance counts stay with Step 9."""
 
 from __future__ import annotations
 
@@ -125,11 +125,60 @@ def _parse_sow_elements(
     return out
 
 
+def _instances_with_names(
+    dec: DocumentScopeDecision,
+    elements: List[dict],
+    count: int,
+) -> List[DocumentInstanceSpec]:
+    """Map SoW names onto Step 9 instances. Never changes how many rows exist."""
+    prior = {inst.index: inst for inst in dec.instances}
+    if len(elements) == 1 and count > 1:
+        el = elements[0]
+        return [
+            DocumentInstanceSpec(
+                index=i,
+                label=prior[i].label if i in prior else "",
+                sow_specific_title=el["sow_specific_title"],
+                sow_title_confidence=el.get("confidence", ""),
+                sow_title_evidence=el.get("evidence_quote", ""),
+                sow_title_shared=True,
+            )
+            for i in range(1, count + 1)
+        ]
+    named = elements[:count]
+    instances: List[DocumentInstanceSpec] = []
+    for i in range(1, count + 1):
+        prev = prior.get(i)
+        prev_label = prev.label if prev else ""
+        if i <= len(named):
+            el = named[i - 1]
+            instances.append(
+                DocumentInstanceSpec(
+                    index=i,
+                    label=str(el.get("label") or "") or prev_label,
+                    sow_specific_title=el["sow_specific_title"],
+                    sow_title_confidence=el.get("confidence", ""),
+                    sow_title_evidence=el.get("evidence_quote", ""),
+                )
+            )
+            continue
+        instances.append(
+            DocumentInstanceSpec(
+                index=i,
+                label=prev_label,
+                sow_specific_title=prev.sow_specific_title if prev else "",
+                sow_title_confidence=prev.sow_title_confidence if prev else "",
+                sow_title_evidence=prev.sow_title_evidence if prev else "",
+            )
+        )
+    return instances
+
+
 def _apply_elements_to_decision(
     dec: DocumentScopeDecision,
     elements: List[dict],
     *,
-    split_rows: bool,
+    apply_suffixes: bool,
 ) -> Tuple[DocumentScopeDecision, dict]:
     audit: dict = {
         "title_key": dec.title_key,
@@ -138,7 +187,7 @@ def _apply_elements_to_decision(
         # Persistito per ancorare la run successiva (stabilità suffissi SoW).
         "sow_elements": elements,
     }
-    if not elements or not split_rows:
+    if not elements or not apply_suffixes:
         audit["outcome"] = "no_elements"
         return dec, audit
 
@@ -183,90 +232,59 @@ def _apply_elements_to_decision(
             return replace(dec, qa_flags=qa_flags), audit
         return dec, audit
 
-    new_count = len(working)
+    # Step 9 owns N for scalable docs. Step 10 only names existing instances.
+    keep_count = count_before if dec.scalable else 1
+    if len(working) > keep_count:
+        audit["elements_unused"] = len(working) - keep_count
+        qa_flags.append("sow_extra_elements_ignored")
+    elif dec.scalable and len(working) > 1 and len(working) < keep_count:
+        qa_flags.append("sow_partial_element_names")
 
-    if new_count == 1:
+    if len(working) == 1:
         el = working[0]
-        # P4 soft: su riga singola un suffisso generico è comunque meglio di
-        # niente — si segnala in QA senza scartarlo.
         if is_generic_sow_title(el["sow_specific_title"]):
             qa_flags.append("sow_title_generic")
             audit["generic_soft"] = True
-        # P2: un solo sow_element non deve collassare un doc scalable che lo
-        # Step 9 aveva già dimensionato a N istanze. Si arricchisce il titolo
-        # ma si conserva instance_count, replicando lo stesso suffisso SoW su
-        # tutte le istanze (marcate shared per disambiguare in Step 11).
-        if dec.scalable and count_before > 1:
-            prior = {inst.index: inst for inst in dec.instances}
-            instances = [
-                DocumentInstanceSpec(
-                    index=i,
-                    label=prior[i].label if i in prior else "",
-                    sow_specific_title=el["sow_specific_title"],
-                    sow_title_confidence=el.get("confidence", ""),
-                    sow_title_evidence=el.get("evidence_quote", ""),
-                    sow_title_shared=True,
-                )
-                for i in range(1, count_before + 1)
-            ]
+        if dec.scalable and keep_count > 1:
             qa_flags.append("sow_single_element_kept_count")
             updated = replace(
                 dec,
-                instance_count=count_before,
-                instances=instances,
+                instance_count=keep_count,
+                instances=_instances_with_names(dec, working, keep_count),
                 qa_flags=qa_flags,
                 selection_reason=(
                     f"{dec.selection_reason}; "
-                    f"10: 1 SoW element su {count_before} istanze (count 9 conservato)"
+                    f"10: 1 SoW name su {keep_count} istanze (count 9 conservato)"
                 ),
             )
             audit["outcome"] = "single_element_kept_count"
-            audit["count_after"] = count_before
+            audit["count_after"] = keep_count
             return updated, audit
 
-        inst = DocumentInstanceSpec(
-            index=1,
-            label=el.get("label", ""),
-            sow_specific_title=el["sow_specific_title"],
-            sow_title_confidence=el.get("confidence", ""),
-            sow_title_evidence=el.get("evidence_quote", ""),
-        )
         updated = replace(
             dec,
             instance_count=1,
-            instances=[inst],
+            instances=_instances_with_names(dec, working, 1),
             qa_flags=qa_flags,
-            selection_reason=f"{dec.selection_reason}; 10: 1 SoW element",
+            selection_reason=f"{dec.selection_reason}; 10: 1 SoW name",
         )
         audit["outcome"] = "single_element"
         audit["count_after"] = 1
         return updated, audit
 
-    instances = [
-        DocumentInstanceSpec(
-            index=i + 1,
-            label=el.get("label", ""),
-            sow_specific_title=el["sow_specific_title"],
-            sow_title_confidence=el.get("confidence", ""),
-            sow_title_evidence=el.get("evidence_quote", ""),
-        )
-        for i, el in enumerate(working)
-    ]
-
-    if new_count > count_before:
-        qa_flags.append("sow_split_expanded")
-    elif new_count < count_before:
-        qa_flags.append("sow_split_reduced_vs_9")
-
     updated = replace(
         dec,
-        instance_count=new_count,
-        instances=instances,
+        instance_count=keep_count,
+        instances=_instances_with_names(dec, working, keep_count),
         qa_flags=qa_flags,
-        selection_reason=f"{dec.selection_reason}; 10: {new_count} SoW elements",
+        selection_reason=(
+            f"{dec.selection_reason}; "
+            f"10: {min(len(working), keep_count)} SoW names "
+            f"(count 9 conservato={keep_count})"
+        ),
     )
-    audit["outcome"] = "multi_element_split"
-    audit["count_after"] = new_count
+    audit["outcome"] = "names_assigned"
+    audit["count_after"] = keep_count
     return updated, audit
 
 
@@ -275,7 +293,7 @@ def _parse_enrichment_response(
     decisions: List[DocumentScopeDecision],
     *,
     max_elements: int,
-    split_rows: bool,
+    apply_suffixes: bool,
 ) -> Tuple[List[DocumentScopeDecision], List[dict]]:
     valid_keys = {d.title_key for d in decisions}
     decision_map = {d.title_key: d for d in decisions}
@@ -293,7 +311,7 @@ def _parse_enrichment_response(
         new_dec, row = _apply_elements_to_decision(
             decision_map[title_key],
             elements,
-            split_rows=split_rows,
+            apply_suffixes=apply_suffixes,
         )
         updated_map[title_key] = new_dec
         audit_rows.append(row)
@@ -319,7 +337,7 @@ def _run_enrichment_llm_for_pair(
     model: Optional[str],
     *,
     max_elements: int,
-    split_rows: bool,
+    apply_suffixes: bool,
 ) -> Tuple[List[DocumentScopeDecision], List[dict], List[dict]]:
     part_total = len(context_chunks)
     llm_parts_audit: List[dict] = []
@@ -340,7 +358,7 @@ def _run_enrichment_llm_for_pair(
             data,
             pair_decisions,
             max_elements=max_elements,
-            split_rows=split_rows,
+            apply_suffixes=apply_suffixes,
         )
         llm_parts_audit.append(
             {
@@ -375,7 +393,7 @@ def _run_enrichment_llm_for_pair(
             data,
             pair_decisions,
             max_elements=max_elements,
-            split_rows=False,
+            apply_suffixes=False,
         )
         for item in data.get("documents") or []:
             if not isinstance(item, dict):
@@ -402,7 +420,7 @@ def _run_enrichment_llm_for_pair(
     final: List[DocumentScopeDecision] = []
     for dec in pair_decisions:
         els = merged_elements.get(dec.title_key, [])[:max_elements]
-        new_dec, row = _apply_elements_to_decision(dec, els, split_rows=split_rows)
+        new_dec, row = _apply_elements_to_decision(dec, els, apply_suffixes=apply_suffixes)
         final.append(new_dec)
         all_rows.append(row)
 
@@ -424,7 +442,7 @@ def _run_enrichment_pair_job(
     model: Optional[str],
     *,
     max_elements: int,
-    split_rows: bool,
+    apply_suffixes: bool,
 ) -> Tuple[_EnrichmentPairJob, List[DocumentScopeDecision], int]:
     disc, chap = job.pair
     try:
@@ -436,7 +454,7 @@ def _run_enrichment_pair_job(
             examples,
             model,
             max_elements=max_elements,
-            split_rows=split_rows,
+            apply_suffixes=apply_suffixes,
         )
         job.pair_audit["outcome"] = "ok"
         job.pair_audit["documents"] = rows
@@ -460,7 +478,7 @@ def run_title_enrichment_pass(
     json_dir: Path,
     model: Optional[str] = None,
 ) -> Tuple[List[DocumentScopeDecision], dict]:
-    split_rows = cfg_bool("TITLE_ENRICHMENT_SPLIT_ROWS", default=True)
+    apply_suffixes = cfg_bool("TITLE_ENRICHMENT_APPLY_SUFFIXES", default=True)
     max_elements = cfg_int("TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC", 15)
     max_examples = cfg_int("TITLE_ENRICHMENT_MAX_EXAMPLES", 10)
     all_examples = load_title_enrichment_examples(max_examples=0)
@@ -471,7 +489,7 @@ def run_title_enrichment_pass(
     if not scope_pdfs or not in_scope:
         summary = {
             "enabled": True,
-            "split_rows": split_rows,
+            "apply_suffixes": apply_suffixes,
             "baseline_rows": baseline_rows,
             "final_rows": baseline_rows,
             "extra_rows": 0,
@@ -556,7 +574,7 @@ def run_title_enrichment_pass(
                 pair_examples,
                 model,
                 max_elements=max_elements,
-                split_rows=split_rows,
+                apply_suffixes=apply_suffixes,
             )
 
         results = run_parallel(
@@ -586,7 +604,7 @@ def run_title_enrichment_pass(
 
     summary = {
         "enabled": True,
-        "split_rows": split_rows,
+        "apply_suffixes": apply_suffixes,
         "min_confidence": cfg("TITLE_ENRICHMENT_MIN_CONFIDENCE", "medium"),
         "max_elements_per_doc": max_elements,
         "examples_loaded": len(all_examples),

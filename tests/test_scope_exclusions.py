@@ -7,7 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mdr_generator.models import NormalizedSignal, PipelineSummary, RaciCandidate
-from mdr_generator.raci_vocabulary import RaciVocabulary
+from mdr_generator.raci_vocabulary import (
+    RaciVocabulary,
+    build_document_exclusion_prompt,
+    build_scope_exclusion_prompt,
+)
 
 
 exclusions = importlib.import_module("mdr_generator.4_scope_exclusions")
@@ -127,6 +131,33 @@ class ScopeExclusionTests(unittest.TestCase):
         )
         self.assertEqual(len(kept), 1)
         self.assertEqual(dropped, [])
+
+    def test_exclusion_prompt_keeps_client_execution_at_document_level(self):
+        prompt = build_scope_exclusion_prompt(self.vocab)
+        self.assertIn("ONLY pipeline stage that decides exclusions", prompt)
+        self.assertIn("ALWAYS exclude_level=\"document\"", prompt)
+        self.assertNotIn(
+            "X is carried out by the Client",
+            prompt,
+        )
+        self.assertIn("Client civil construction is NOT this case", prompt)
+        mapping = build_document_exclusion_prompt(
+            {
+                "label": "civil works",
+                "exclusion_type": "client_responsibility",
+                "responsibility": "committente",
+                "discipline_codes": ["CIV"],
+                "chapter_names": [],
+                "pairs": [],
+                "retained_deliverables": ["foundation loads"],
+                "scope_qualifiers": ["Client civil works"],
+                "source_pages": [6],
+                "evidence_quote": "opere civili a carico della Committente",
+            },
+            "- foundation loads | FOUNDATION LOADS | CIV | FOUNDATIONS",
+        )
+        self.assertIn("Client execution", mapping)
+        self.assertIn("Client-provided documentation", mapping)
 
     def test_contradictory_assuntore_payload_is_inactive(self):
         item = self._parse(

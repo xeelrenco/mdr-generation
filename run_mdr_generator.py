@@ -284,7 +284,7 @@ def main() -> int:
         f"{' + debug columns' if schedule_debug_columns else ''}"
     )
     print(
-        f"Title enrichment (10): {'attivo (v2 split)' if title_enrichment_enabled else 'disabilitato'}"
+        f"Title enrichment (10): {'attivo (suffissi SoW)' if title_enrichment_enabled else 'disabilitato'}"
     )
     print(f"LLM parallel workers: {llm_parallel_workers()}")
     print(f"Output Excel:      {output_dir}")
@@ -343,7 +343,8 @@ def main() -> int:
 
         if pass2_enabled:
             print(
-                "Step 3: verifica completa catalogo RACI e consenso pair..."
+                "Step 3: verifica catalogo RACI (soggetto documentale in progetto; "
+                "esclusioni = Step 4)..."
             )
             consensus_signals, gap_pass_audit, gap_raw = run_gap_targeted_pass(
                 scope_pdfs,
@@ -533,7 +534,7 @@ def main() -> int:
         )
 
         if title_enrichment_enabled:
-            print("Step 10: titoli SoW-specifici e split righe (sow_elements)...")
+            print("Step 10: titoli SoW-specifici (suffissi; count = Step 9)...")
             title_model = cfg("TITLE_ENRICHMENT_LLM_MODEL") or args.scope_llm_model
             scope_decisions, title_enrichment_audit = run_title_enrichment_pass(
                 scope_pdfs,
@@ -549,7 +550,7 @@ def main() -> int:
                 f"{len(in_scope)} doc con titolo SoW; "
                 f"righe {title_enrichment_audit.get('baseline_rows', '?')} -> "
                 f"{title_enrichment_audit.get('final_rows', '?')} "
-                f"(+{title_enrichment_audit.get('extra_rows', 0)} split)"
+                f"(+{title_enrichment_audit.get('extra_rows', 0)} vs Step 9)"
             )
         else:
             save_json(

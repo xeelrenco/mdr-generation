@@ -88,7 +88,11 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
 
     title_enrichment = data.get("title_enrichment") or {}
     set_key("TITLE_ENRICHMENT_ENABLED", title_enrichment.get("enabled", True))
-    set_key("TITLE_ENRICHMENT_SPLIT_ROWS", title_enrichment.get("split_rows", True))
+    if "apply_suffixes" in title_enrichment:
+        apply_suffixes = title_enrichment.get("apply_suffixes")
+    else:
+        apply_suffixes = title_enrichment.get("split_rows", True)
+    set_key("TITLE_ENRICHMENT_APPLY_SUFFIXES", apply_suffixes)
     set_key(
         "TITLE_ENRICHMENT_MAX_ELEMENTS_PER_DOC",
         title_enrichment.get("max_elements_per_doc", 15),

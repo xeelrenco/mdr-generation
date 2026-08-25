@@ -55,13 +55,13 @@ llm_workers = 15
 
 [title_enrichment]
 enabled = true
-split_rows = true
+apply_suffixes = true  # Step 10: attacca i nomi SoW alle copie dello Step 9 (non cambia N)
 max_elements_per_doc = 15
 min_confidence = "medium"
 llm_model = ""  # vuoto = usa scope.pass1.llm_model
 examples_path = "input/title_enrichment_examples.json"
 max_examples = 24
-generic_filter = true  # scarta suffissi generici (livello impianto/unita) quando si splitta
+generic_filter = true  # scarta suffissi generici (livello impianto/unita) se ce ne sono piu' di uno
 generic_patterns = []  # regex extra opzionali; le cifre/tag salvano sempre il titolo
 
 [sow_mandatory]

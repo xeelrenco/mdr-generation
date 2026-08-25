@@ -74,11 +74,66 @@ _MDR_SUFFIX_LANGUAGE_RULES = """LANGUAGE (MDR title suffix fields: label, sow_sp
 - Historical or few-shot examples illustrate scope/granularity only — suffix language is always English."""
 
 
+def consensus_presence_policy(*, whole_document: bool) -> str:
+    """Pass 2 / arbiter: chapter is a documentation subject of the project, not an exclusion."""
+    if whole_document:
+        false_scope = (
+            "present=false means the whole SoW does not make this chapter a "
+            "documentation subject of the project. Step 4 still decides who "
+            "executes the work and who issues the MDR documents."
+        )
+    else:
+        false_scope = (
+            'present=false means only "this excerpt does not make the chapter a '
+            'documentation subject"; another excerpt may support it.'
+        )
+    return f"""This stage decides ONLY whether the RACI chapter is a documentation subject of
+THIS project. Step 4 is the only stage that applies exclusions (Client vs Contractor,
+by Others, Client-provided annexes).
+
+present=true when the SoW introduces the system, equipment, material, test or
+engineering activity of that pair as part of the project — including when the
+Client/Committente executes construction, installation or supply, and including when
+some documents of the chapter are Client input annexes.
+
+present=false only when:
+- the SoW says that system/work is not part of the project at all
+  ("non sono previsti lavori", "nessun intervento", "no modification to X");
+- it names existing plant or equipment that receives no work in this project;
+- it only mentions an interface, signal exchange or communication protocol towards a
+  third-party or existing system, instead of engineering that system;
+- it describes a different system or activity that merely resembles the chapter name.
+
+Do NOT set present=false because work is "a carico del Committente/Cliente",
+"escluso dalla fornitura", "by Others", Client civil works, Client installation, or
+because a document is an attachment the Client provides.
+
+If WHO executes the work or WHO issues the documents is ambiguous, use present=true.
+If whether the system exists in this project at all is ambiguous, use present=false.
+{false_scope}"""
+
+
+def consensus_discovery_exclusion_rule() -> str:
+    """Pass 1 / gap-pass: emit the pair; do not apply Client/execution exclusions."""
+    return (
+        "Do not omit a pair because construction, installation or supply is assigned "
+        "to the Client/Committente, or because an annex is provided by the Client. "
+        "Emit the pair when the chapter subject exists in the project; Step 4 removes "
+        "Client-executed work and Client-issued documents."
+    )
+
+
 def build_scope_exclusion_prompt(vocab: RaciVocabulary) -> str:
     """Prompt for step 4: LLM chooses exclusion level against RACI catalog entities."""
     return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
-Your task: find work areas OUT OF CONTRACTOR DOCUMENTATION SCOPE because they are:
+This is the ONLY pipeline stage that decides exclusions: Client vs Contractor
+responsibility, "by Others", and documentation the Client provides as input.
+Earlier scope passes only asked whether the chapter subject exists in the project.
+They may have admitted pairs whose construction, installation, or whose documents
+belong to the Client — that is expected; you remove those here.
+
+Find work areas OUT OF CONTRACTOR DOCUMENTATION SCOPE because they are:
 - explicitly excluded from the SoW, OR
 - assigned to Client / Owner / Employer / Committente / "by Others" / "by Client"
   (and NOT explicitly assigned to Contractor / Assuntore for documentation).
@@ -89,7 +144,8 @@ You MUST choose an exclude_level for each finding. Prefer the narrowest correct 
 - "document" (DEFAULT): only specific MDR documents are out
 - "pair": one or more exact RACI pairs (discipline_code + chapter_name) are out
 - "chapter": a ChapterName is out across ALL disciplines (same chapter in every discipline)
-- "discipline": an entire RACI discipline is out (rare; e.g. all civil works)
+- "discipline": an entire RACI discipline is out (rare; e.g. a discipline with no
+  contractor engineering at all — NOT "civil works executed by the Client")
 
 ALLOWED RACI DISCIPLINES (use exact codes only):
 {vocab.discipline_prompt_block()}
@@ -123,16 +179,30 @@ For EACH exclusion, output one object:
 - source_pages: 1-based PDF page numbers
 - evidence_quote: verbatim SoW quote (max 250 chars)
 
-HOW TO CHOOSE THE LEVEL — match the breadth of the SoW statement:
-- The SoW denies or excludes a WHOLE SYSTEM or WHOLE WORK CATEGORY
-  ("no works are foreseen on X", "no modification to X", "X is excluded from the
-  contractor scope", "X is carried out by the Client"):
-  → use "pair" for every allowed pair whose chapter covers that system,
-    or "chapter" when the same chapter belongs to several disciplines.
-  → do NOT use "document" for these: the whole documentation of that system is out.
-- The SoW removes only a specific activity or deliverable inside a system that otherwise
-  stays in scope → use "document".
-- The SoW removes an entire engineering discipline → use "discipline".
+HOW TO CHOOSE THE LEVEL — split execution from documentation:
+
+1) Client EXECUTES work (civil construction, cable pulling, panel installation,
+   painting application, mechanical completion) but the Contractor may still issue
+   engineering documents (loads, layouts, data sheets, specs, supervision, supply):
+   → ALWAYS exclude_level="document".
+   → List Contractor documents that stay in retained_deliverables.
+   → Never use pair/chapter/discipline: those wipe the engineering of that system.
+   → If the SoW is silent on documents and only assigns execution to the Client,
+     still use "document" (case 1), not a whole-pair wipe.
+
+2) The SoW assigns the DOCUMENTATION itself to the Client (annex provided by the
+   Client, "documentazione a carico del Committente", input design basis / material
+   classes / lists the Contractor only uses):
+   → "document" for specific titles;
+   → "pair" only if the Contractor issues NO documents in that chapter.
+
+3) The system is not in the project at all ("non sono previsti lavori su X",
+   "nessun intervento", "no modification to existing X"):
+   → "pair" (or "chapter" if the same chapter is out in every discipline).
+   → Here the whole documentation set is out because the subject does not exist.
+
+4) An entire engineering discipline has no contractor engineering → "discipline"
+   (rare). Client civil construction is NOT this case.
 
 When you choose "pair" or "chapter", list ALL matching entries, not just the closest one.
 If the SoW keeps ANY named Contractor deliverable inside an otherwise excluded system
@@ -147,8 +217,7 @@ Rules:
 - Never invent discipline codes, chapter names, or pairs — copy exactly from the allowed lists.
 - If SoW says Client/Committente and does NOT give documentation to Assuntore:
   responsibility="committente", explicit_assuntore=false.
-- If unsure whether an area is excluded at all, omit it; but once the SoW clearly excludes
-  a system, do not narrow the level out of caution.
+- If unsure whether an area is excluded at all, omit it.
 - Respond with JSON only: {{"schema_version": 2, "exclusions": [...]}}
 """
 
@@ -216,16 +285,25 @@ Return every TitleKey from the candidate list whose subject belongs to the exclu
 
 Rules:
 - Use exact title_key strings from the candidate list only.
-- Be complete: when a system or work category is out, its whole documentation set is out —
-  specifications, data sheets, calculation reports, layouts, drawings, lists, MTO,
-  bid evaluations, procedures and inspection documents of that system all count.
+- Be complete inside the excluded AREA, not beyond it.
+- If this exclusion is Client execution (installation, civil works, mechanical
+  completion), exclude only execution/as-built/erection documents of that package.
+  Keep engineering (loads, layouts, data sheets, specifications, supervision)
+  unless the evidence itself puts those documents on the Client.
+- If this exclusion is Client-provided documentation (annex, design basis or
+  material classes issued by the Client as input), exclude those input documents.
+  When a system or work category is out of the project entirely, its whole
+  documentation set is out — specifications, data sheets, calculation reports,
+  layouts, drawings, lists, MTO, bid evaluations, procedures and inspection
+  documents of that system all count.
 - Judge by the SUBJECT of the title, not by the wording of the evidence: the SoW quote is
   in Italian and the titles are in English.
 - Keep a document only if its subject is genuinely a different system that stays in
   contractor scope, or if the evidence itself requires the contractor to issue it.
 - Never exclude a candidate matching a retained deliverable. Distinguish carefully:
   existing vs new systems, inside vs outside battery limits, installation vs engineering
-  or supply, and Client equipment vs Contractor-supplied equipment.
+  or supply, Client equipment vs Contractor-supplied equipment, and Client-issued
+  input annexes vs Contractor MDR deliverables.
 - If nothing matches, return an empty list.
 - Respond with JSON only:
   {{"excluded_documents": [{{"title_key": "...", "reason": "..."}}]}}
@@ -263,7 +341,9 @@ Rules:
 - Do NOT mark a document unsupported just because the SoW is brief about it: a single
   mention of the system, or the system being an obvious part of the described plant,
   is enough to keep it.
-- Do NOT reason about who is responsible (Client vs Contractor); another stage handles that.
+- Do NOT reason about who is responsible (Client vs Contractor) and do NOT drop a
+  document because the Client executes the work or provides an annex: Step 4 already
+  handled those exclusions.
 - Use exact title_key strings from the candidate list only.
 - Report ONLY the unsupported ones; everything not reported is kept.
 - Respond with JSON only:
@@ -274,8 +354,9 @@ Rules:
 def build_scope_pdf_prompt(vocab: RaciVocabulary) -> str:
     return f"""You analyze the attached Scope of Work (SoW) PDF for an EPC/engineering project.
 
-Your task: identify which official RACI pairs (discipline + document chapter) are required
-in scope for documentation/deliverables — NOT individual document titles.
+Your task: identify which official RACI pairs (discipline + document chapter) are
+documentation subjects of THIS project — NOT individual document titles, and NOT
+exclusions. {consensus_discovery_exclusion_rule()}
 
 ALLOWED PAIRS — each signal MUST use EXACTLY one row (discipline_code | chapter_name):
 {vocab.pairs_prompt_block()}
@@ -307,6 +388,7 @@ Rules:
   disciplines apply (e.g. both PRC | MATERIAL SELECTION and PVV | MATERIAL SELECTION).
 - Do not output a signal with only a discipline and no chapter_name.
 - Do not emit pairs without SoW evidence — justify each signal from the cited pages.
+- {consensus_discovery_exclusion_rule()}
 - Do not expand one scope area to every pair in the list — only pairs clearly supported.
 - Do not list single MDR document titles.
 - If the PDF does not mention documentation scope, return {{"signals": []}}.
@@ -356,7 +438,8 @@ def build_gap_targeted_pass_prompt(
 CONTEXT: A first scope extraction pass on this SoW already reported some discipline+chapter
 documentation pairs from the official RACI catalog. The pairs below were NOT identified in
 that first pass but remain valid catalog chapters. Re-read THIS EXCERPT ONLY and confirm any
-pair that is explicitly supported by the SoW text as in-scope for engineering documentation.
+pair that is a documentation subject of this project in the excerpt.
+{consensus_discovery_exclusion_rule()}
 
 CANDIDATE PAIRS (not yet reported in pass 1) — output a signal ONLY for pairs you find
 clearly supported in this excerpt:
@@ -382,6 +465,7 @@ RULES:
 - This upload covers global pages {page_start}–{page_end} of {total_pages} total pages.
 - Output ONLY pairs from the CANDIDATE list above — do not invent other pairs.
 - Do not report a pair without explicit SoW evidence in this excerpt.
+- {consensus_discovery_exclusion_rule()}
 - If one SoW section supports multiple candidate pairs, output multiple signals — do not
   stop after the first match when others are equally justified.
 - Pay special attention to ICT/control systems, electrical, instrumentation, telecom.
@@ -413,22 +497,20 @@ def build_catalog_verification_prompt(
     if tie_break:
         task_label = (
             "TIE-BREAK: two previous analyses disagreed on these pairs. You read the "
-            "COMPLETE SoW and issue the deciding judgement."
+            "COMPLETE SoW and issue the deciding judgement on whether each pair is a "
+            "documentation subject of the project. Do not apply exclusions."
         )
         source_label = (
             f"This upload is the COMPLETE SoW ({total_pages} pages), not an excerpt."
         )
-        scope_label = (
-            "present=false is a FINAL decision: it means the whole SoW does not put "
-            "that pair in the Contractor's documentation scope."
-        )
+        presence = consensus_presence_policy(whole_document=True)
     else:
-        task_label = "INDEPENDENT VERIFICATION: assess every assigned catalog pair."
-        source_label = f"This upload is global pages {page_start}-{page_end} of {total_pages}."
-        scope_label = (
-            'present=false means only "not supported in this excerpt"; another excerpt '
-            "may support it."
+        task_label = (
+            "INDEPENDENT VERIFICATION: assess every assigned catalog pair as a "
+            "documentation subject of the project. Do not apply exclusions."
         )
+        source_label = f"This upload is global pages {page_start}-{page_end} of {total_pages}."
+        presence = consensus_presence_policy(whole_document=False)
     return f"""You verify official RACI discipline+chapter pairs against an
 EPC/engineering Scope of Work (SoW) PDF.
 
@@ -438,18 +520,7 @@ ASSIGNED PAIRS:
 {pairs_block}
 
 Return EXACTLY one decision for every assigned pair, in the same discipline/chapter spelling.
-present=true only when the text puts engineering documentation or deliverables of that pair
-inside the Contractor's scope of work. A system, equipment item, work category, test or
-required engineering activity in scope is sufficient support; do not require the exact
-chapter wording.
-
-present=false, even when the chapter subject appears in the text, whenever the text only:
-- denies or excludes the work ("non sono previsti lavori", "nessun intervento",
-  "escluso dalla fornitura", "a carico del Committente/Cliente");
-- names existing plant or equipment that receives no work in this project;
-- mentions an interface, signal exchange or communication protocol towards a
-  third-party or existing system, instead of designing that system;
-- describes a different system or activity that merely resembles the chapter name.
+{presence}
 
 For every decision:
 - discipline_code: exact assigned code
@@ -463,14 +534,13 @@ For every decision:
 Rules:
 - {source_label}
 - Decide every assigned pair; never omit difficult pairs.
-- The evidence_quote must state the work, not deny it. A negated sentence is never evidence.
-- Use confidence="strong" only for an explicit scope obligation; a single indirect or
+- The evidence_quote must state that the chapter subject exists in the project.
+  A negated sentence ("nessun intervento") is never evidence for present=true.
+- Use confidence="strong" only for an explicit project subject; a single indirect or
   inferred mention is "weak".
 - Parenthetical document examples explain chapter meaning only. They are not project evidence.
 - Do not infer a pair from generic EPC practice.
 - Do not output unassigned pairs.
-- {scope_label}
-- If evidence is ambiguous, use present=false rather than inventing support.
 - JSON only:
 {{"decisions": [{{"discipline_code": "...", "chapter_name": "...",
 "present": true, "confidence": "strong", "source_pages": [1],
@@ -516,6 +586,8 @@ def build_arbiter_prompt(
 
     The arbiter is the only stage that sees both earlier arguments, so it can weigh
     them against the complete SoW instead of repeating either earlier model.
+    It still decides only whether the chapter is a documentation subject; Step 4
+    applies Client/execution exclusions.
     """
     blocks: List[str] = []
     for (disc, chap), context in sorted(pair_context, key=lambda item: item[0]):
@@ -543,33 +615,27 @@ EPC/engineering Scope of Work (SoW).
 
 Two independent models already evaluated the SoW in excerpts and disagreed on the pairs
 below, or one of them failed to answer. You read the COMPLETE SoW ({total_pages} pages,
-attached in full) and you see every earlier verdict with its argument. Your decision is final.
+attached in full) and you see every earlier verdict with its argument. Your decision is
+final for whether the chapter is a documentation subject of the project. Do not apply
+exclusions — Step 4 does that.
 
 CONTESTED PAIRS AND EARLIER VERDICTS:
 {pairs_block}
 
 Return EXACTLY one decision for every contested pair, in the same discipline/chapter spelling.
-present=true only when the SoW puts engineering documentation or deliverables of that pair
-inside the Contractor's scope of work. A system, equipment item, work category, test or
-required engineering activity in scope is sufficient support; do not require the exact
-chapter wording.
-
-present=false, even when the chapter subject appears in the text, whenever the text only:
-- denies or excludes the work ("non sono previsti lavori", "nessun intervento",
-  "escluso dalla fornitura", "a carico del Committente/Cliente");
-- names existing plant or equipment that receives no work in this project;
-- mentions an interface, signal exchange or communication protocol towards a
-  third-party or existing system, instead of designing that system;
-- describes a different system or activity that merely resembles the chapter name.
+{consensus_presence_policy(whole_document=True)}
 
 How to arbitrate:
 - Verify every quoted argument against the attached SoW before trusting it. A quote that is
   negated, conditional or about existing plant does not support the pair.
-- Both earlier passes saw only excerpts, so they could not see a negation or a Client
-  responsibility stated elsewhere. Treat both critically; do not confirm either out of
+- Both earlier passes saw only excerpts, so they could not see a negation ("nessun
+  intervento") stated elsewhere. Treat both critically; do not confirm either out of
   consistency with their previous answer.
-- Count arguments, not votes: a single well-quoted obligation outweighs several generic
-  claims, and an argument that misreads the SoW carries no weight.
+- Ignore arguments that a pair is absent only because the Client executes construction
+  or installation, or because an annex is provided by the Client. Those are Step 4
+  exclusions. Accept the pair when the project involves that chapter's subject.
+- Count arguments, not votes: a single well-quoted project subject outweighs several
+  generic claims, and an argument that misreads the SoW carries no weight.
 - Decide every contested pair; never omit one and never invent support that you cannot quote.
 
 For every decision:
@@ -603,7 +669,8 @@ def build_scope_pdf_chunk_repass_prompt(
         f"(global page numbers). Signals with pages outside this range are invalid.\n"
         f"- Do NOT reference content from other parts of the document; if unsure, return "
         f'{{"signals": []}}.\n'
-        f"- Look for documentation/deliverable obligations explicitly stated in these pages.\n"
+        f"- Look for chapter subjects (systems, equipment, tests, engineering activities) "
+        f"explicitly stated in these pages.\n"
         f"- Emit every allowed pair justified by the excerpt (one signal per pair).\n"
         f"- Prefer strong/medium confidence only when the SoW text clearly supports the pair; "
         f"do not guess generic pairs (LIST, OPERATING MANUAL, SCADA) without explicit evidence.\n"
@@ -653,6 +720,7 @@ mentioned or not quantified in this part.
 The RACI pair {discipline_code} | {chapter_name} is already confirmed in project scope.
 All catalog documents below are required. Your task is ONLY to estimate how many
 instances each Scalable document needs (supports, units, areas, buildings, etc.).
+A later step only adds SoW-specific names; it will not change your counts.
 {part_note}
 SOW CONTEXT (grouped excerpts for this pair):
 {sow_context}
@@ -719,10 +787,10 @@ def build_title_enrichment_prompt(
     part_index: Optional[int] = None,
     part_total: Optional[int] = None,
 ) -> str:
-    """Prompt for Step 10: SoW-specific titles and row split elements."""
+    """Prompt for Step 10: SoW-specific MDR suffixes. Do not change instance counts."""
     lines: List[str] = []
     for dec in decisions:
-        hint = f" (9 instances={dec.instance_count})" if getattr(dec, "instance_count", 1) > 1 else ""
+        hint = f" (Step 9 count={dec.instance_count}, already final)" if getattr(dec, "instance_count", 1) > 1 else ""
         lines.append(f"- {dec.title_key} | {dec.raci_title}{hint}")
 
     catalog_block = "\n".join(lines)
@@ -745,9 +813,8 @@ List sow_elements evident ONLY in this part.
     return f"""You analyze Scope of Work (SoW) excerpts for an EPC/engineering project.
 
 The RACI pair {discipline_code} | {chapter_name} is confirmed in project scope.
-Each catalog document below may map to ONE MDR row by default. Multi-row split is allowed
-ONLY when the RACI document itself is a per-item deliverable AND splitting is fundamental
-to distinguish separate deliverables (buildings, trains, utility systems, equipment tags).
+Instance counts are already decided (Step 9, shown in parentheses). Do NOT add or
+remove MDR rows. Return names/suffixes for the existing instances only.
 {part_note}
 SOW CONTEXT:
 {sow_context}
@@ -769,17 +836,15 @@ RULES:
 
 {_MDR_SUFFIX_LANGUAGE_RULES}
 
-GRANULARITY (split vs single) — prefer FEWER rows:
+GRANULARITY (names, not rows) — Step 9 already fixed how many MDR lines exist:
 - LIST / REGISTER / INDEX RACI titles (Equipment List, Valve List, Cable List, etc.):
   emit at most ONE sow_element (or []). Never one element per listed tag/item in the SoW.
 - NON-SCALABLE / plant-wide docs (Philosophy, Design Criteria, Design Basis, Specs that are
-  not per-equipment): default to ONE element or []. Do not split Start-up/Shutdown Philosophy
-  or similar into many rows.
-- Split into multiple sow_elements ONLY when the catalog document is inherently per-item
-  (data sheets, layouts per building/train, P&IDs per system) AND the SoW enumerates distinct
-  deliverables that must remain separate for MDR clarity.
+  not per-equipment): default to ONE element or [].
+- If Step 9 count is N>1, emit at most N sow_elements as names for those rows (tags,
+  buildings, trains). Extra names are ignored. Fewer than N is OK.
 - When the SoW has a list/table of items but the RACI title IS the list document, keep a
-  single row — do not explode the list into many MDR lines.
+  single name — do not explode the list.
 - A generic facility label alone is fine when no finer breakdown is needed for that document.
 
 MATCH RACI DOCUMENT SCOPE to SoW evidence (use the matching SoW excerpt type only):

@@ -9,7 +9,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mdr_generator.models import NormalizedSignal, RawScopeSignal
-from mdr_generator.raci_vocabulary import RaciVocabulary, build_arbiter_prompt
+from mdr_generator.raci_vocabulary import (
+    RaciVocabulary,
+    build_arbiter_prompt,
+    build_catalog_verification_prompt,
+    build_gap_targeted_pass_prompt,
+    build_scope_pdf_prompt,
+)
 from mdr_generator.scope_run_history import (
     archive_json_run,
     compare_with_previous_run,
@@ -633,6 +639,30 @@ class ScopeStabilityTests(unittest.TestCase):
             self.assertEqual(comparison["added_pairs"], ["ICT|C"])
             self.assertEqual(comparison["removed_pairs"], ["ELE|B"])
             self.assertEqual(comparison["candidate_delta"], 4)
+
+    def test_consensus_prompts_defer_exclusions_to_step4(self):
+        forbidden = "inside the Contractor's scope of work"
+        discovery = build_scope_pdf_prompt(self.vocab)
+        gap = build_gap_targeted_pass_prompt([self.a], 1, 10, 40)
+        verify = build_catalog_verification_prompt([self.a], 1, 10, 40)
+        arbiter = build_arbiter_prompt(
+            [(self.a, {"pass1": {"present": True, "reason": "foundations required"}})],
+            40,
+        )
+        for prompt, name in (
+            (discovery, "pass1"),
+            (gap, "gap"),
+            (verify, "pass2"),
+            (arbiter, "arbiter"),
+        ):
+            with self.subTest(name):
+                self.assertNotIn(forbidden, prompt)
+                self.assertIn("Step 4", prompt)
+        self.assertIn("Do not omit a pair because construction", discovery)
+        self.assertIn("Do not omit a pair because construction", gap)
+        self.assertIn("Do NOT set present=false because work is", verify)
+        self.assertIn("a carico del Committente/Cliente", verify)
+        self.assertIn("Ignore arguments that a pair is absent only because the Client", arbiter)
 
 
 if __name__ == "__main__":

@@ -68,7 +68,7 @@ class SingleElementKeepCountTests(unittest.TestCase):
     def test_scalable_multi_instance_keeps_count_with_one_element(self) -> None:
         dec = _decision(instance_count=4)
         updated, audit = _apply_elements_to_decision(
-            dec, [_element("New Steam Generator")], split_rows=True
+            dec, [_element("New Steam Generator")], apply_suffixes=True
         )
         self.assertEqual(audit["outcome"], "single_element_kept_count")
         self.assertEqual(audit["count_before"], 4)
@@ -90,14 +90,14 @@ class SingleElementKeepCountTests(unittest.TestCase):
             ],
         )
         updated, _ = _apply_elements_to_decision(
-            dec, [_element("Centrifugal Pump")], split_rows=True
+            dec, [_element("Centrifugal Pump")], apply_suffixes=True
         )
         self.assertEqual([i.label for i in updated.instances], ["P-7515/A", "P-7515/B"])
 
     def test_non_scalable_single_element_still_collapses_to_one(self) -> None:
         dec = _decision(scalable=False, instance_count=1)
         updated, audit = _apply_elements_to_decision(
-            dec, [_element("Commissioning")], split_rows=True
+            dec, [_element("Commissioning")], apply_suffixes=True
         )
         self.assertEqual(audit["outcome"], "single_element")
         self.assertEqual(updated.instance_count, 1)
@@ -108,7 +108,7 @@ class SingleElementKeepCountTests(unittest.TestCase):
         instance_count>1 anomalo, un non-scalable resta conservativo a 1."""
         dec = _decision(scalable=False, instance_count=4)
         updated, audit = _apply_elements_to_decision(
-            dec, [_element("New Steam Generator")], split_rows=True
+            dec, [_element("New Steam Generator")], apply_suffixes=True
         )
         self.assertEqual(audit["outcome"], "single_element")
         self.assertEqual(updated.instance_count, 1)
@@ -119,7 +119,7 @@ class SingleElementKeepCountTests(unittest.TestCase):
         updated, audit = _apply_elements_to_decision(
             dec,
             [_element("Steam Generator"), _element("Feed Water Pump")],
-            split_rows=True,
+            apply_suffixes=True,
         )
         self.assertTrue(audit["non_scalable_no_split"])
         self.assertEqual(updated.instance_count, 1)
@@ -128,21 +128,70 @@ class SingleElementKeepCountTests(unittest.TestCase):
     def test_scalable_count_one_single_element_unchanged(self) -> None:
         dec = _decision(instance_count=1)
         updated, audit = _apply_elements_to_decision(
-            dec, [_element("Commissioning")], split_rows=True
+            dec, [_element("Commissioning")], apply_suffixes=True
         )
         self.assertEqual(audit["outcome"], "single_element")
         self.assertEqual(updated.instance_count, 1)
 
-    def test_multi_element_split_still_wins(self) -> None:
+    def test_scalable_multi_elements_do_not_change_count(self) -> None:
         dec = _decision(instance_count=2)
         updated, audit = _apply_elements_to_decision(
             dec,
             [_element("Steam Generator"), _element("Feed Water Pump")],
-            split_rows=True,
+            apply_suffixes=True,
         )
-        self.assertEqual(audit["outcome"], "multi_element_split")
+        self.assertEqual(audit["outcome"], "names_assigned")
         self.assertEqual(updated.instance_count, 2)
+        self.assertEqual(
+            [i.sow_specific_title for i in updated.instances],
+            ["Steam Generator", "Feed Water Pump"],
+        )
         self.assertFalse(any(i.sow_title_shared for i in updated.instances))
+
+    def test_scalable_extra_names_are_ignored(self) -> None:
+        dec = _decision(instance_count=2)
+        updated, audit = _apply_elements_to_decision(
+            dec,
+            [
+                _element("Steam Generator"),
+                _element("Feed Water Pump"),
+                _element("Condensate Pump"),
+                _element("Boiler Feed Pump"),
+            ],
+            apply_suffixes=True,
+        )
+        self.assertEqual(updated.instance_count, 2)
+        self.assertEqual(audit["count_after"], 2)
+        self.assertEqual(audit["elements_unused"], 2)
+        self.assertIn("sow_extra_elements_ignored", updated.qa_flags)
+        self.assertEqual(
+            [i.sow_specific_title for i in updated.instances],
+            ["Steam Generator", "Feed Water Pump"],
+        )
+
+    def test_scalable_fewer_names_keep_remaining_instances(self) -> None:
+        dec = _decision(
+            instance_count=4,
+            instances=[
+                DocumentInstanceSpec(index=1, label="A"),
+                DocumentInstanceSpec(index=2, label="B"),
+                DocumentInstanceSpec(index=3, label="C"),
+                DocumentInstanceSpec(index=4, label="D"),
+            ],
+        )
+        updated, audit = _apply_elements_to_decision(
+            dec,
+            [_element("Steam Generator"), _element("Feed Water Pump")],
+            apply_suffixes=True,
+        )
+        self.assertEqual(updated.instance_count, 4)
+        self.assertEqual(audit["outcome"], "names_assigned")
+        self.assertIn("sow_partial_element_names", updated.qa_flags)
+        self.assertEqual(
+            [i.sow_specific_title for i in updated.instances],
+            ["Steam Generator", "Feed Water Pump", "", ""],
+        )
+        self.assertEqual([i.label for i in updated.instances], ["A", "B", "C", "D"])
 
 
 class DisplayTitleTests(unittest.TestCase):
@@ -176,7 +225,7 @@ class ExpansionNoDedupeTests(unittest.TestCase):
     def test_four_instances_one_element_expand_to_four_rows(self) -> None:
         dec = _decision(instance_count=4)
         updated, _ = _apply_elements_to_decision(
-            dec, [_element("New Steam Generator")], split_rows=True
+            dec, [_element("New Steam Generator")], apply_suffixes=True
         )
         items, dup_removed = expand_scope_to_line_items([updated], [_candidate(updated)])
         self.assertEqual(len(items), 4)
@@ -231,10 +280,10 @@ class GenericSuffixTests(unittest.TestCase):
                 _element("Feed Water Pump"),
                 _element("Steam Generator"),
             ],
-            split_rows=True,
+            apply_suffixes=True,
         )
         self.assertEqual(audit["generic_dropped"], 1)
-        self.assertEqual(audit["outcome"], "multi_element_split")
+        self.assertEqual(audit["outcome"], "names_assigned")
         self.assertEqual(updated.instance_count, 2)
         self.assertIn("sow_generic_elements_dropped", updated.qa_flags)
         self.assertNotIn(
@@ -247,17 +296,17 @@ class GenericSuffixTests(unittest.TestCase):
         updated, audit = _apply_elements_to_decision(
             dec,
             [_element("New Steam Generation Unit"), _element("Utilities Plant")],
-            split_rows=True,
+            apply_suffixes=True,
         )
         self.assertTrue(audit["generic_all"])
         self.assertIn("sow_all_elements_generic", updated.qa_flags)
-        # count di Step 9 conservato (P2), niente split su suffissi generici
+        # count di Step 9 conservato, niente nuove righe su suffissi generici
         self.assertEqual(updated.instance_count, 3)
 
     def test_single_generic_element_is_warned_not_dropped(self) -> None:
         dec = _decision(instance_count=1, scalable=False)
         updated, audit = _apply_elements_to_decision(
-            dec, [_element("New Steam Generation Unit")], split_rows=True
+            dec, [_element("New Steam Generation Unit")], apply_suffixes=True
         )
         self.assertTrue(audit["generic_soft"])
         self.assertIn("sow_title_generic", updated.qa_flags)
@@ -295,7 +344,7 @@ class ListLikeTitleTests(unittest.TestCase):
         updated, audit = _apply_elements_to_decision(
             dec,
             [_element("Gate Valves"), _element("Ball Valves"), _element("Check Valves")],
-            split_rows=True,
+            apply_suffixes=True,
         )
         self.assertTrue(audit["list_no_split"])
         self.assertEqual(updated.instance_count, 1)
