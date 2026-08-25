@@ -45,9 +45,10 @@ def _instance_specs(dec: DocumentScopeDecision) -> List[DocumentInstanceSpec]:
 
 def expand_scope_to_line_items(
     decisions: List[DocumentScopeDecision],
-    ranked_candidates: List[RaciCandidate],
+    candidates: List[RaciCandidate],
 ) -> Tuple[List[MdrLineItem], int]:
-    cand_map: Dict[str, RaciCandidate] = {c.title_key: c for c in ranked_candidates}
+    """Materialize rows. Historical MATCH prior and Excel order are Step 12."""
+    cand_map: Dict[str, RaciCandidate] = {c.title_key: c for c in candidates}
     line_items: List[MdrLineItem] = []
     seen_keys: Set[str] = set()
     dup_removed = 0
@@ -59,7 +60,6 @@ def expand_scope_to_line_items(
         if not cand:
             continue
 
-        bucket = "with_history" if cand.historical_count > 0 else "without_history"
         specs = _instance_specs(dec)
 
         for spec in specs:
@@ -97,10 +97,7 @@ def expand_scope_to_line_items(
                     instance_index=inst_idx,
                     instance_label=spec.label,
                     instance_count=dec.instance_count,
-                    historical_count=cand.historical_count,
-                    avg_confidence=cand.avg_confidence,
                     selection_reason=dec.selection_reason,
-                    bucket=bucket,
                     decision_source=dec.decision_source,
                     sow_specific_title=spec.sow_specific_title,
                     sow_title_confidence=spec.sow_title_confidence,
@@ -108,26 +105,4 @@ def expand_scope_to_line_items(
                 )
             )
 
-    return order_line_items(line_items), dup_removed
-
-
-def order_line_items(items: List[MdrLineItem]) -> List[MdrLineItem]:
-    with_hist = [i for i in items if i.bucket == "with_history"]
-    without = [i for i in items if i.bucket != "with_history"]
-    with_hist.sort(
-        key=lambda x: (
-            -x.historical_count,
-            -(x.avg_confidence or 0.0),
-            x.discipline_code,
-            x.chapter_name,
-            x.mdr_document_title.lower(),
-        )
-    )
-    without.sort(
-        key=lambda x: (
-            x.discipline_code,
-            x.chapter_name,
-            x.mdr_document_title.lower(),
-        )
-    )
-    return with_hist + without
+    return line_items, dup_removed

@@ -4,9 +4,11 @@ MDR Generator v1 — Scope PDF to Master Document Register.
 
 Step (ordine esecuzione):
   1 scope LLM → 2 normalize → 3 consenso catalogo → 4 esclusioni SoW
-  → 5 profili → 6 candidati → 7 basis gate → 8 ranking storico
+  → 5 profili → 6 candidati → 7 basis gate
   → 9 scalable → 10 title enrichment → 11 espansione righe
-  → 12 schedule → 13 confronto Renco → 14 Excel → 15 report QA
+  → 11b obbligatori SoW (audit)
+  → 12 ordine righe (schedule se attivo, altrimenti storico MATCH)
+  → 13 confronto Renco → 14 Excel → 15 report QA
 
 Usage:
   python run_mdr_generator.py --project-name "7350"
@@ -63,7 +65,6 @@ from mdr_generator.utils import format_elapsed_seconds, resolve_json_output_dir,
 _im = importlib.import_module
 fetch_raci_candidates = _im("mdr_generator.5_candidates").fetch_raci_candidates
 save_candidates_csv = _im("mdr_generator.5_candidates").save_candidates_csv
-apply_historical_ranking = _im("mdr_generator.7_historical").apply_historical_ranking
 HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 consolidate_normalized_signals = _im(
@@ -308,7 +309,7 @@ def main() -> int:
     duration_populated = 0
     manhours_populated = 0
     schedule_dated_rows = 0
-    ranked = []
+    candidates = []
     normalized = []
     uncertain = []
     scope_exclusions = []
@@ -507,12 +508,7 @@ def main() -> int:
                 f"  -> {len(candidates)} candidati "
                 f"(-{basis_gate_audit.get('documents_dropped', 0)} senza base nello SoW)"
             )
-
-        print("Step 8: ranking storico (solo MATCH consolidati)...")
-        ranked = apply_historical_ranking(conn, candidates)
-        with_hist = sum(1 for c in ranked if c.historical_count > 0)
-        print(f"  -> {with_hist} con storico, {len(ranked) - with_hist} senza")
-        save_candidates_csv(ranked, candidates_csv)
+        save_candidates_csv(candidates, candidates_csv)
 
         discipline_short_codes = load_discipline_short_codes(conn)
 
@@ -521,7 +517,7 @@ def main() -> int:
             scope_pdfs,
             raw_signals,
             normalized,
-            ranked,
+            candidates,
             profiles,
             json_dir,
             model=args.scope_llm_model,
@@ -562,14 +558,14 @@ def main() -> int:
             )
 
         print("Step 11: espansione istanze MDR...")
-        line_items, dup_removed = expand_scope_to_line_items(in_scope, ranked)
+        line_items, dup_removed = expand_scope_to_line_items(in_scope, candidates)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
 
         # Canale indipendente dallo scope consensus: mai bloccante.
         print("Step 11b: documenti obbligatori dichiarati nello SoW (audit)...")
         sow_mandatory_audit = run_sow_mandatory_pass(
             scope_pdfs,
-            ranked,
+            candidates,
             line_items,
             json_dir,
             model=cfg("SOW_MANDATORY_LLM_MODEL") or args.scope_llm_model,
@@ -590,10 +586,12 @@ def main() -> int:
 
         if schedule_enabled:
             print(
-                "Step 12: schedule (durata timeline, MANHOURS, PLANNED FIRST ISSUE, ordine righe)..."
+                "Step 12: ordine righe (schedule: date, predecessori, MANHOURS)..."
             )
         else:
-            print("Step 12: schedule disabilitato (durata, MANHOURS e date non compilate)...")
+            print(
+                "Step 12: ordine righe (storico MATCH; schedule spento, niente date)..."
+            )
         line_items, sched_audit = run_schedule_pass(
             conn,
             line_items,
@@ -603,6 +601,12 @@ def main() -> int:
         duration_populated = sched_audit.get("duration_populated", 0)
         manhours_populated = sched_audit.get("manhours_populated", 0)
         schedule_dated_rows = sched_audit.get("scheduled_rows", 0)
+        with_hist_rows = sched_audit.get("rows_with_history", 0)
+        print(
+            f"  -> storico MATCH annotato: {with_hist_rows}/"
+            f"{len(line_items)} righe "
+            f"(ordine={sched_audit.get('row_order', '?')})"
+        )
         if schedule_enabled:
             print(
                 f"  -> {duration_populated}/{len(line_items)} righe con durata timeline (giorni)"
@@ -671,7 +675,7 @@ def main() -> int:
         ),
         raw_signal_count=len(raw_signals),
         normalized_signal_count=len(normalized),
-        candidate_count=len(ranked),
+        candidate_count=len(candidates),
         selected_count=distinct_keys,
         with_history_count=sum(1 for s in line_items if s.bucket == "with_history"),
         without_history_count=sum(

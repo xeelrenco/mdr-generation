@@ -15,6 +15,13 @@ from .models import MdrLineItem
 from .utils import save_json
 
 _im = importlib.import_module
+apply_historical_to_line_items = _im(
+    "mdr_generator.7_historical"
+).apply_historical_to_line_items
+fetch_historical_prior = _im("mdr_generator.7_historical").fetch_historical_prior
+order_line_items_by_history = _im(
+    "mdr_generator.7_historical"
+).order_line_items_by_history
 load_timeline_duration_map = _im(
     "mdr_generator.12_timeline_duration"
 ).load_timeline_duration_map
@@ -168,6 +175,28 @@ def _debug_flags(
     return ",".join(flags)
 
 
+def _historical_prior_audit(
+    conn: duckdb.DuckDBPyConnection,
+    line_items: List[MdrLineItem],
+) -> dict:
+    if not line_items:
+        return {
+            "historical_prior_applied": False,
+            "rows_with_history": 0,
+            "rows_without_history": 0,
+        }
+    hist_map = fetch_historical_prior(
+        conn, [item.raci_title_key for item in line_items]
+    )
+    apply_historical_to_line_items(line_items, hist_map)
+    with_hist = sum(1 for item in line_items if item.bucket == "with_history")
+    return {
+        "historical_prior_applied": True,
+        "rows_with_history": with_hist,
+        "rows_without_history": len(line_items) - with_hist,
+    }
+
+
 def run_schedule_pass(
     conn: duckdb.DuckDBPyConnection,
     line_items: List[MdrLineItem],
@@ -175,10 +204,21 @@ def run_schedule_pass(
     *,
     enabled: bool = True,
 ) -> Tuple[List[MdrLineItem], dict]:
-    """Apply timeline duration, MANHOURS, planned dates and row order (all gated by schedule)."""
+    """Annotate historical MATCH, then schedule dates or fall back to history order."""
+    hist_audit = _historical_prior_audit(conn, line_items)
+
     if not enabled or not line_items:
+        if line_items:
+            line_items = order_line_items_by_history(line_items)
+            hist_audit["row_order"] = "historical_match"
+        else:
+            hist_audit["row_order"] = "unchanged"
         _clear_planning_fields(line_items)
-        audit = {"enabled": False, "reason": SCHEDULE_DISABLED_REASON}
+        audit = {
+            "enabled": False,
+            "reason": SCHEDULE_DISABLED_REASON,
+            **hist_audit,
+        }
         save_json(json_dir / "schedule_audit.json", audit)
         save_json(
             json_dir / "manhours_audit.json",
@@ -191,6 +231,7 @@ def run_schedule_pass(
     manhours_populated, mh_breakdown = apply_manhours_from_duration(line_items)
 
     line_items, sched_audit = _schedule_line_items(conn, line_items, json_dir)
+    hist_audit["row_order"] = "schedule"
 
     save_json(
         json_dir / "manhours_audit.json",
@@ -208,6 +249,7 @@ def run_schedule_pass(
         "enabled": True,
         "duration_populated": duration_populated,
         "manhours_populated": manhours_populated,
+        **hist_audit,
         **sched_audit,
     }
     save_json(json_dir / "schedule_audit.json", audit)
