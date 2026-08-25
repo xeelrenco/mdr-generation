@@ -405,14 +405,14 @@ def write_qa_report(
         ],
         ["3. Documenti RACI candidati", summary.candidate_count, "Da coppie scope"],
         [
-            "9. Decisioni document scope",
+            "8. Decisioni document scope",
             summary.document_scope_decisions,
             "Pass LLM per coppia (in scope / istanze)",
         ],
         [
-            "10. Title enrichment (SoW)",
+            "9. Title enrichment (SoW)",
             "Sì" if summary.title_enrichment_enabled else "No",
-            "Titoli SoW-specifici + split righe v2 (sow_elements)",
+            "Suffissi SoW sulle copie dello Step 8 (non cambia N)",
         ],
         [
             "   — doc con titolo SoW",
@@ -420,9 +420,9 @@ def write_qa_report(
             "Documenti con almeno un sow_specific_title",
         ],
         [
-            "   — righe extra da split",
+            "   — righe extra vs Step 8",
             summary.title_enrichment_extra_rows if summary.title_enrichment_enabled else "—",
-            "Righe MDR oltre il conteggio post-9",
+            "Righe MDR oltre il conteggio post-8",
         ],
         ["4. Righe MDR finali", summary.mdr_line_items or summary.selected_count, "Output Excel MDR"],
         [

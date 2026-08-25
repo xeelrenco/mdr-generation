@@ -688,7 +688,7 @@ def build_scalable_instance_prompt(
     part_index: Optional[int] = None,
     part_total: Optional[int] = None,
 ) -> str:
-    """Prompt for step 9: instance counts for Scalable RACI documents only."""
+    """Prompt for step 8: instance counts for Scalable RACI documents only."""
     lines: List[str] = []
     for c in candidates:
         examples = (historical_examples or {}).get(c.title_key) or []
@@ -787,10 +787,10 @@ def build_title_enrichment_prompt(
     part_index: Optional[int] = None,
     part_total: Optional[int] = None,
 ) -> str:
-    """Prompt for Step 10: SoW-specific MDR suffixes. Do not change instance counts."""
+    """Prompt for Step 9: SoW-specific MDR suffixes. Do not change instance counts."""
     lines: List[str] = []
     for dec in decisions:
-        hint = f" (Step 9 count={dec.instance_count}, already final)" if getattr(dec, "instance_count", 1) > 1 else ""
+        hint = f" (Step 8 count={dec.instance_count}, already final)" if getattr(dec, "instance_count", 1) > 1 else ""
         lines.append(f"- {dec.title_key} | {dec.raci_title}{hint}")
 
     catalog_block = "\n".join(lines)
@@ -813,7 +813,7 @@ List sow_elements evident ONLY in this part.
     return f"""You analyze Scope of Work (SoW) excerpts for an EPC/engineering project.
 
 The RACI pair {discipline_code} | {chapter_name} is confirmed in project scope.
-Instance counts are already decided (Step 9, shown in parentheses). Do NOT add or
+Instance counts are already decided (Step 8, shown in parentheses). Do NOT add or
 remove MDR rows. Return names/suffixes for the existing instances only.
 {part_note}
 SOW CONTEXT:
@@ -836,12 +836,12 @@ RULES:
 
 {_MDR_SUFFIX_LANGUAGE_RULES}
 
-GRANULARITY (names, not rows) — Step 9 already fixed how many MDR lines exist:
+GRANULARITY (names, not rows) — Step 8 already fixed how many MDR lines exist:
 - LIST / REGISTER / INDEX RACI titles (Equipment List, Valve List, Cable List, etc.):
   emit at most ONE sow_element (or []). Never one element per listed tag/item in the SoW.
 - NON-SCALABLE / plant-wide docs (Philosophy, Design Criteria, Design Basis, Specs that are
   not per-equipment): default to ONE element or [].
-- If Step 9 count is N>1, emit at most N sow_elements as names for those rows (tags,
+- If Step 8 count is N>1, emit at most N sow_elements as names for those rows (tags,
   buildings, trains). Extra names are ignored. Fewer than N is OK.
 - When the SoW has a list/table of items but the RACI title IS the list document, keep a
   single name — do not explode the list.

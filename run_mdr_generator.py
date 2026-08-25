@@ -5,8 +5,8 @@ MDR Generator v1 — Scope PDF to Master Document Register.
 Step (ordine esecuzione):
   1 scope LLM → 2 normalize → 3 consenso catalogo → 4 esclusioni SoW
   → 5 profili → 6 candidati → 7 basis gate
-  → 9 scalable → 10 title enrichment → 11 espansione righe
-  → 11b obbligatori SoW (audit)
+  → 8 scalable → 9 title enrichment → 10 espansione righe
+  → 11 obbligatori SoW (audit)
   → 12 ordine righe (schedule se attivo, altrimenti storico MATCH)
   → 13 confronto Renco → 14 Excel → 15 report QA
 
@@ -144,7 +144,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-title-enrichment",
         action="store_true",
-        help="Disabilita Step 10 arricchimento/split titoli SoW",
+        help="Disabilita Step 9 arricchimento titoli SoW",
     )
     p.add_argument(
         "--scope-only",
@@ -285,7 +285,7 @@ def main() -> int:
         f"{' + debug columns' if schedule_debug_columns else ''}"
     )
     print(
-        f"Title enrichment (10): {'attivo (suffissi SoW)' if title_enrichment_enabled else 'disabilitato'}"
+        f"Title enrichment (9): {'attivo (suffissi SoW)' if title_enrichment_enabled else 'disabilitato'}"
     )
     print(f"LLM parallel workers: {llm_parallel_workers()}")
     print(f"Output Excel:      {output_dir}")
@@ -512,7 +512,7 @@ def main() -> int:
 
         discipline_short_codes = load_discipline_short_codes(conn)
 
-        print("Step 9: istanze Scalable (LLM su estratti SoW raggruppati per coppia)...")
+        print("Step 8: istanze Scalable (LLM su estratti SoW raggruppati per coppia)...")
         scope_decisions, _scope_audit = run_document_scope_pass(
             scope_pdfs,
             raw_signals,
@@ -530,7 +530,7 @@ def main() -> int:
         )
 
         if title_enrichment_enabled:
-            print("Step 10: titoli SoW-specifici (suffissi; count = Step 9)...")
+            print("Step 9: titoli SoW-specifici (suffissi; count = Step 8)...")
             title_model = cfg("TITLE_ENRICHMENT_LLM_MODEL") or args.scope_llm_model
             scope_decisions, title_enrichment_audit = run_title_enrichment_pass(
                 scope_pdfs,
@@ -546,7 +546,7 @@ def main() -> int:
                 f"{len(in_scope)} doc con titolo SoW; "
                 f"righe {title_enrichment_audit.get('baseline_rows', '?')} -> "
                 f"{title_enrichment_audit.get('final_rows', '?')} "
-                f"(+{title_enrichment_audit.get('extra_rows', 0)} vs Step 9)"
+                f"(+{title_enrichment_audit.get('extra_rows', 0)} vs Step 8)"
             )
         else:
             save_json(
@@ -557,12 +557,12 @@ def main() -> int:
                 },
             )
 
-        print("Step 11: espansione istanze MDR...")
+        print("Step 10: espansione istanze MDR...")
         line_items, dup_removed = expand_scope_to_line_items(in_scope, candidates)
         print(f"  -> {len(line_items)} righe MDR ({dup_removed} duplicati rimossi)")
 
         # Canale indipendente dallo scope consensus: mai bloccante.
-        print("Step 11b: documenti obbligatori dichiarati nello SoW (audit)...")
+        print("Step 11: documenti obbligatori dichiarati nello SoW (audit)...")
         sow_mandatory_audit = run_sow_mandatory_pass(
             scope_pdfs,
             candidates,

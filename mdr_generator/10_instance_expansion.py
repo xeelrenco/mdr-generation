@@ -1,4 +1,4 @@
-"""Step 11: Expand document scope decisions into MDR line items."""
+"""Step 10: Expand document scope decisions into MDR line items."""
 
 from __future__ import annotations
 

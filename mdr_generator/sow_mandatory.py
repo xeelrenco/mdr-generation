@@ -1,10 +1,10 @@
 """
-Canale indipendente dal consenso scope: quali documenti lo SoW obbliga
-esplicitamente a consegnare (P3).
+Step 11: documenti che lo SoW obbliga esplicitamente a consegnare (audit).
 
-Non partecipa all'ammissione delle coppie e non blocca mai la pipeline: produce
-un audit autoportante (clausola + evidence quote) e un foglio QA. I documenti
-obbligatori che non finiscono nell'MDR sono un warning, non un errore.
+Canale indipendente dal consenso scope. Non partecipa all'ammissione delle coppie
+e non blocca mai la pipeline: produce un audit autoportante (clausola + evidence
+quote) e un foglio QA. I documenti obbligatori che non finiscono nell'MDR sono un
+warning, non un errore.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Step 9: instance counts for Scalable RACI documents using grouped SoW excerpts."""
+"""Step 8: instance counts for Scalable RACI documents using grouped SoW excerpts."""
 
 from __future__ import annotations
 
@@ -541,7 +541,7 @@ def run_document_scope_pass(
             scalable_jobs,
             _job_fn,
             max_workers=workers,
-            label="9 Scalable",
+            label="8 Scalable",
             describe=_scalable_desc,
             result_note=_scalable_note,
         )

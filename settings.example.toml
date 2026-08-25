@@ -55,7 +55,7 @@ llm_workers = 15
 
 [title_enrichment]
 enabled = true
-apply_suffixes = true  # Step 10: attacca i nomi SoW alle copie dello Step 9 (non cambia N)
+apply_suffixes = true  # Step 9: attacca i nomi SoW alle copie dello Step 8 (non cambia N)
 max_elements_per_doc = 15
 min_confidence = "medium"
 llm_model = ""  # vuoto = usa scope.pass1.llm_model

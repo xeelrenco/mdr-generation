@@ -1,4 +1,4 @@
-"""Step 10: SoW-specific MDR suffixes. Instance counts stay with Step 9."""
+"""Step 9: SoW-specific MDR suffixes. Instance counts stay with Step 8."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def _instances_with_names(
     elements: List[dict],
     count: int,
 ) -> List[DocumentInstanceSpec]:
-    """Map SoW names onto Step 9 instances. Never changes how many rows exist."""
+    """Map SoW names onto Step 8 instances. Never changes how many rows exist."""
     prior = {inst.index: inst for inst in dec.instances}
     if len(elements) == 1 and count > 1:
         el = elements[0]
@@ -232,7 +232,7 @@ def _apply_elements_to_decision(
             return replace(dec, qa_flags=qa_flags), audit
         return dec, audit
 
-    # Step 9 owns N for scalable docs. Step 10 only names existing instances.
+    # Step 8 owns N for scalable docs. Step 9 only names existing instances.
     keep_count = count_before if dec.scalable else 1
     if len(working) > keep_count:
         audit["elements_unused"] = len(working) - keep_count
@@ -254,7 +254,7 @@ def _apply_elements_to_decision(
                 qa_flags=qa_flags,
                 selection_reason=(
                     f"{dec.selection_reason}; "
-                    f"10: 1 SoW name su {keep_count} istanze (count 9 conservato)"
+                    f"9: 1 SoW name su {keep_count} istanze (count 8 conservato)"
                 ),
             )
             audit["outcome"] = "single_element_kept_count"
@@ -266,7 +266,7 @@ def _apply_elements_to_decision(
             instance_count=1,
             instances=_instances_with_names(dec, working, 1),
             qa_flags=qa_flags,
-            selection_reason=f"{dec.selection_reason}; 10: 1 SoW name",
+            selection_reason=f"{dec.selection_reason}; 9: 1 SoW name",
         )
         audit["outcome"] = "single_element"
         audit["count_after"] = 1
@@ -279,8 +279,8 @@ def _apply_elements_to_decision(
         qa_flags=qa_flags,
         selection_reason=(
             f"{dec.selection_reason}; "
-            f"10: {min(len(working), keep_count)} SoW names "
-            f"(count 9 conservato={keep_count})"
+            f"9: {min(len(working), keep_count)} SoW names "
+            f"(count 8 conservato={keep_count})"
         ),
     )
     audit["outcome"] = "names_assigned"
@@ -581,7 +581,7 @@ def run_title_enrichment_pass(
             jobs,
             _job_fn,
             max_workers=workers,
-            label="10 Title enrichment",
+            label="9 Title enrichment",
             describe=_desc,
             result_note=_note,
         )

@@ -45,7 +45,7 @@ def _decision(
         instances=instances if instances is not None else [
             DocumentInstanceSpec(index=i) for i in range(1, instance_count + 1)
         ],
-        selection_reason="9: scalable",
+        selection_reason="8: scalable",
     )
 
 
@@ -300,7 +300,7 @@ class GenericSuffixTests(unittest.TestCase):
         )
         self.assertTrue(audit["generic_all"])
         self.assertIn("sow_all_elements_generic", updated.qa_flags)
-        # count di Step 9 conservato, niente nuove righe su suffissi generici
+        # count di Step 8 conservato, niente nuove righe su suffissi generici
         self.assertEqual(updated.instance_count, 3)
 
     def test_single_generic_element_is_warned_not_dropped(self) -> None:
