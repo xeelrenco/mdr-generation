@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from .document_effort_profile import DocumentEffortProfile
 from .models import (
@@ -26,13 +27,197 @@ def _pair_key(sig: NormalizedSignal) -> Tuple[str, str]:
     return (sig.discipline_code, sig.chapter_name or "")
 
 
+# P-7515/B, 320-V-1001 — not GT2 / HIGH-PRESSURE (no hyphen+digits).
+_EQUIP_TAG_RE = re.compile(r"\b[A-Za-z]{1,8}-\d{2,}[A-Za-z0-9./\-]*\b")
+_INTERNAL_LABEL_RE = re.compile(
+    r"\b(section|sections|sezione|sezioni|rotor|casing|stage|stages|"
+    r"internals?|bearing|bearings|shaft|impeller)\b",
+    re.IGNORECASE,
+)
+_PLANT_TAIL_RE = re.compile(
+    r"\b(unit|units|plant|plants|project|projects|package|packages|"
+    r"facility|facilities|complex|site|sites|area|areas|"
+    r"system|systems|works|scope)\b[\s.]*$",
+    re.IGNORECASE,
+)
+_TRAILING_NUM_RE = re.compile(r"(\d+)\s*$")
+_WORD_RE = re.compile(r"[a-z]+", re.IGNORECASE)
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "for",
+        "to",
+        "in",
+        "on",
+        "new",
+        "main",
+        "with",
+    }
+)
+
+
+def _normalize_label_text(label: str) -> str:
+    return re.sub(r"\s+", " ", (label or "").strip().lower())
+
+
+def _specific_tags(label: str) -> Set[str]:
+    return {m.upper().rstrip(".,;") for m in _EQUIP_TAG_RE.findall(label or "")}
+
+
+def _trailing_index(label: str) -> Optional[str]:
+    match = _TRAILING_NUM_RE.search((label or "").strip())
+    return match.group(1) if match else None
+
+
+def _content_tokens(label: str) -> Set[str]:
+    return {w.lower() for w in _WORD_RE.findall(label or "")} - _STOPWORDS
+
+
+def is_noise_instance_label(label: str) -> bool:
+    """True for empty, plant-level, or machine-internal labels that are not units."""
+    text = (label or "").strip()
+    if not text:
+        return True
+    if _specific_tags(text):
+        return False
+    if _INTERNAL_LABEL_RE.search(text):
+        return True
+    if _PLANT_TAIL_RE.search(text) and not re.search(r"\d", text):
+        return True
+    return False
+
+
+def labels_are_same_instance(left: str, right: str) -> bool:
+    """True when two SoW labels name the same deliverable unit."""
+    norm_left = _normalize_label_text(left)
+    norm_right = _normalize_label_text(right)
+    if not norm_left or not norm_right:
+        return False
+    if norm_left == norm_right:
+        return True
+    shorter, longer = (
+        (norm_left, norm_right)
+        if len(norm_left) <= len(norm_right)
+        else (norm_right, norm_left)
+    )
+    # Substring only for tag-like labels (digit/equipment tag). Family nouns like
+    # "compressor" must not collapse Unit 1 and Unit 2 into one instance.
+    tag_like = bool(_specific_tags(shorter) or re.search(r"\d", shorter))
+    if (
+        len(shorter) >= 3
+        and tag_like
+        and re.search(rf"\b{re.escape(shorter)}\b", longer)
+    ):
+        return True
+    tags_left, tags_right = _specific_tags(left), _specific_tags(right)
+    if tags_left and tags_right and tags_left & tags_right:
+        return True
+    idx_left, idx_right = _trailing_index(left), _trailing_index(right)
+    if idx_left and idx_left == idx_right and (
+        _content_tokens(left) & _content_tokens(right)
+    ):
+        return True
+    return False
+
+
+def cluster_instance_labels(labels: Sequence[str]) -> List[str]:
+    """Union-find clustering; keep the most specific label per identity."""
+    items: List[str] = []
+    seen: Set[str] = set()
+    for raw in labels:
+        text = (raw or "").strip()
+        if not text or is_noise_instance_label(text):
+            continue
+        key = _normalize_label_text(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(text)
+
+    parent = list(range(len(items)))
+
+    def find(idx: int) -> int:
+        while parent[idx] != idx:
+            parent[idx] = parent[parent[idx]]
+            idx = parent[idx]
+        return idx
+
+    def union(left: int, right: int) -> None:
+        root_left, root_right = find(left), find(right)
+        if root_left == root_right:
+            return
+        if root_left < root_right:
+            parent[root_right] = root_left
+        else:
+            parent[root_left] = root_right
+
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if labels_are_same_instance(items[i], items[j]):
+                union(i, j)
+
+    groups: Dict[int, List[str]] = {}
+    order: List[int] = []
+    for i, label in enumerate(items):
+        root = find(i)
+        if root not in groups:
+            order.append(root)
+            groups[root] = []
+        groups[root].append(label)
+
+    def spec_score(label: str) -> Tuple[int, int]:
+        return (1 if _specific_tags(label) else 0, len(label))
+
+    return [max(groups[root], key=spec_score) for root in order]
+
+
+def resolve_merged_instance_count(
+    part_counts: Sequence[int],
+    part_labels: Sequence[Sequence[str]],
+) -> Tuple[int, List[str], str]:
+    """Union identities across split SoW parts. Never sum overlapping mentions."""
+    flat: List[str] = []
+    unlabeled_counts: List[int] = []
+    for raw_count, labels in zip(part_counts, part_labels):
+        count = int(raw_count or 0)
+        if count < 1:
+            continue
+        usable = [
+            lab
+            for lab in labels
+            if str(lab or "").strip() and not is_noise_instance_label(str(lab))
+        ]
+        if usable:
+            flat.extend(str(lab).strip() for lab in usable)
+        else:
+            unlabeled_counts.append(count)
+
+    clustered = cluster_instance_labels(flat)
+    unlabeled_max = max(unlabeled_counts) if unlabeled_counts else 0
+    if clustered:
+        total = max(len(clustered), unlabeled_max)
+        mode = (
+            "label_union_with_unlabeled_max"
+            if unlabeled_max > len(clustered)
+            else "label_union"
+        )
+        return total, clustered, mode
+    if unlabeled_max:
+        return unlabeled_max, [], "unlabeled_max"
+    return 1, [], "no_evidence"
+
+
 def _normalize_instances(
     instance_count: int,
     raw_instances: Optional[List[dict]],
 ) -> List[DocumentInstanceSpec]:
-    if instance_count <= 1:
-        return [DocumentInstanceSpec(index=1, label="")]
-    specs: List[DocumentInstanceSpec] = []
+    if instance_count < 1:
+        return []
     by_index: Dict[int, str] = {}
     for item in raw_instances or []:
         if not isinstance(item, dict):
@@ -44,9 +229,10 @@ def _normalize_instances(
         if idx < 1 or idx > instance_count:
             continue
         by_index[idx] = str(item.get("label") or "").strip()
-    for i in range(1, instance_count + 1):
-        specs.append(DocumentInstanceSpec(index=i, label=by_index.get(i, "")))
-    return specs
+    return [
+        DocumentInstanceSpec(index=i, label=by_index.get(i, ""))
+        for i in range(1, instance_count + 1)
+    ]
 
 
 def _auto_include_decision(
@@ -218,20 +404,19 @@ def _merge_partial_scalable_decisions(
             bucket = merged.setdefault(
                 dec.title_key,
                 {
-                    "count_sum": 0,
+                    "part_counts": [],
+                    "part_labels": [],
                     "quotes": [],
                     "pages": set(),
-                    "labels": [],
                 },
             )
-            if dec.instance_count > 0:
-                bucket["count_sum"] += dec.instance_count
+            bucket["part_counts"].append(dec.instance_count)
+            bucket["part_labels"].append(
+                [inst.label for inst in dec.instances if inst.label]
+            )
             if dec.evidence_quote:
                 bucket["quotes"].append(dec.evidence_quote)
             bucket["pages"].update(dec.source_pages)
-            for inst in dec.instances:
-                if inst.label and inst.label not in bucket["labels"]:
-                    bucket["labels"].append(inst.label)
 
     decisions: List[DocumentScopeDecision] = []
     split_flag = f"sow_context_split_{split_parts}_parts"
@@ -239,31 +424,32 @@ def _merge_partial_scalable_decisions(
     for cand in candidates:
         data = merged.get(cand.title_key)
         qa_flags = [split_flag]
-        if not data or data["count_sum"] < 1:
-            total = 1
+        part_counts = data["part_counts"] if data else []
+        part_labels = data["part_labels"] if data else []
+        total, labels, merge_mode = resolve_merged_instance_count(
+            part_counts, part_labels
+        )
+        if merge_mode == "no_evidence":
             qa_flags.append("scalable_partial_no_evidence")
             reason = (
                 f"Merged {split_parts} SoW parts; no quantity found, default count=1"
             )
             decision_source = "rule_fallback"
         else:
-            total = data["count_sum"]
             reason = (
-                f"Merged instance counts from {split_parts} SoW context parts (sum)"
+                f"Merged instance identities from {split_parts} SoW context parts "
+                f"({merge_mode})"
             )
             decision_source = "llm"
+            qa_flags.append(f"sow_instances_{merge_mode}")
 
-        labels: List[str] = data["labels"] if data else []
-        if total > 1:
-            instances = [
-                DocumentInstanceSpec(
-                    index=i,
-                    label=labels[i - 1] if i <= len(labels) else "",
-                )
-                for i in range(1, total + 1)
-            ]
-        else:
-            instances = [DocumentInstanceSpec(index=1, label="")]
+        instances = [
+            DocumentInstanceSpec(
+                index=i,
+                label=labels[i - 1] if i <= len(labels) else "",
+            )
+            for i in range(1, total + 1)
+        ]
 
         quote = ""
         if data and data["quotes"]:
@@ -292,6 +478,9 @@ def _merge_partial_scalable_decisions(
                 "title_key": cand.title_key,
                 "outcome": "merged",
                 "merged_count": total,
+                "merge_mode": merge_mode,
+                "part_counts": part_counts,
+                "clustered_labels": labels,
                 "parts": split_parts,
             }
         )

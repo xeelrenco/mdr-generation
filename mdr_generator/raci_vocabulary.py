@@ -604,18 +604,23 @@ def build_scalable_instance_prompt(
     catalog_block = "\n".join(lines)
     multi_part = part_total is not None and part_total > 1
     part_note = ""
-    count_rule = "- Derive instance_count from SoW quantities; if unclear use 1."
+    count_rule = (
+        "- Derive instance_count from distinct SoW deliverable units; if unclear use 1."
+    )
     count_field = "- instance_count: integer >= 1"
 
     if multi_part:
         part_note = f"""
 IMPORTANT: This is SoW context PART {part_index} of {part_total} for the same RACI pair.
-Count instances evident ONLY in this part. Use instance_count=0 if a document is not
-mentioned or not quantified in this part.
+Count and LABEL distinct items evident ONLY in this part. Use instance_count=0 if a
+document is not mentioned or not quantified in this part.
+A later merge UNIONS labels across parts — it does NOT add the counts. Repeating the
+same machine/tag in this part is still 1.
 """
         count_rule = (
-            "- Derive instance_count ONLY from quantities in THIS part; "
-            "use 0 if not mentioned or not quantified here."
+            "- Derive instance_count ONLY from distinct items in THIS part; "
+            "use 0 if not mentioned or not quantified here. Do not inflate the count "
+            "because this part repeats a name or describes internals of one machine."
         )
         count_field = "- instance_count: integer >= 0 (0 = not quantified in this part)"
 
@@ -635,10 +640,10 @@ SCALABLE CATALOG DOCUMENTS (TitleKey | Title):
 For EACH catalog document above, output one object:
 - title_key: exact TitleKey from the list
 {count_field}
-- instances: list of {{index, label}} when instance_count > 1
+- instances: list of {{index, label}} when instance_count >= 1 (including count=1)
   - index: 1..instance_count
-  - label: optional meaningful English disambiguator from SoW (area, equipment tag, building);
-    translate to English if the SoW text is not in English; empty if none
+  - label: canonical English tag/name from this excerpt (equipment tag, building, train);
+    translate if the SoW is not English; empty only if the SoW has no name
 - evidence_quote: short quote supporting the count (max 250 chars); empty if instance_count=0
 - source_pages: 1-based PDF page numbers from the context above
 
@@ -646,6 +651,13 @@ RULES:
 - Use ONLY title_key values from the catalog list.
 {count_rule}
 - Do not output documents not in the catalog list.
+- Count distinct deliverable units that need separate MDR rows (equipment tags, trains,
+  buildings, areas, packages). One physical machine = 1.
+- Do NOT count: repeated mentions; aliases of the same tag (P-7515/B and GT2 P-7515/B
+  are one machine); internal sections or components of one machine (high/low-pressure
+  section, rotor, casing, bearings, swallowing-capacity subsections).
+- Prefer the equipment tag as label when the SoW has one. Do not emit a section/component
+  as a separate instance.
 - label must not be generic like "NUM 2" only — leave empty if no meaningful suffix.
 - LIST / REGISTER / INDEX documents (title contains "list", "register", or "index" as the
   document type, e.g. Equipment List, Valve List, Cable List): always instance_count=1.
@@ -775,6 +787,8 @@ BUILDING / AREA LAYOUT RACI (titles containing Building, FOR BUILDINGS, Lighting
 
 EQUIPMENT-FAMILY RACI (data sheets, inspection sheets, specs for pumps/HX/compressors):
 - Prefer equipment tag, service name, or train/area + equipment family.
+- Do NOT emit internal sections/components of one machine as separate elements
+  (high/low-pressure section, rotor, casing, internals). Use the parent equipment tag.
 
 DIAGRAM RACI (P&ID, PFD, SLD, flow diagrams):
 - Prefer battery limit, system, package, area, or equipment tag — whichever the SoW uses.
