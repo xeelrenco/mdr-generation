@@ -71,6 +71,8 @@ consolidate_normalized_signals = _im(
     "mdr_generator.2_normalize"
 ).consolidate_normalized_signals
 save_normalized = _im("mdr_generator.2_normalize").save_normalized
+load_normalized = _im("mdr_generator.2_normalize").load_normalized
+load_raw_signals = _im("mdr_generator.2_normalize").load_raw_signals
 run_gap_targeted_pass = _im("mdr_generator.3_catalog_consensus").run_gap_targeted_pass
 run_scope_exclusion_pass = _im(
     "mdr_generator.4_scope_exclusions"
@@ -147,6 +149,13 @@ def _parse_args() -> argparse.Namespace:
         "--scope-only",
         action="store_true",
         help="Esegue solo estrazione, validazione e consenso scope (canary stabilità)",
+    )
+    p.add_argument(
+        "--from-step",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Riprendi dalla step N. 4 = riusa JSON scope già salvato e salta LLM 1-3",
     )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
@@ -313,80 +322,114 @@ def main() -> int:
 
     conn = connect_motherduck()
     try:
-        chunk_on = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
-        print(
-            "Step 1: analisi Scope — PDF inviato all'LLM"
-            + (" (chunking attivo)" if chunk_on else "")
-            + "..."
-        )
-        raw_signals = extract_scope_signals(
-            scope_pdfs,
-            conn,
-            raw_json,
-            output_dir,
-            model=args.scope_llm_model,
-        )
-        print(f"  -> {len(raw_signals)} segnali (discipline/chapter RACI)")
-
-        print("Step 2: validazione coppie (disciplina+capitolo) su catalogo RACI...")
-        vocab = load_raci_vocabulary(conn)
-        normalized, uncertain = normalize_signals(
-            raw_signals,
-            vocab.discipline_codes,
-            vocab.chapter_names,
-            vocab.canonical_pairs,
-        )
-        print(f"  -> {len(normalized)} segnali validi, {len(uncertain)} incerti")
-
-        if pass2_enabled:
+        resume_from_step = max(1, int(args.from_step or 1))
+        if resume_from_step >= 4:
+            if not raw_json.exists() or not norm_json.exists():
+                print(
+                    "ERRORE: --from-step 4 richiede "
+                    f"{raw_json.name} e {norm_json.name} in {json_dir}",
+                    file=sys.stderr,
+                )
+                return 1
             print(
-                "Step 3: verifica catalogo RACI (soggetto documentale in progetto; "
-                "esclusioni = Step 4)..."
+                "Ripresa da Step 4: riuso JSON scope già salvati "
+                "(Step 1-3 non richiamano LLM)..."
             )
-            consensus_signals, gap_pass_audit, gap_raw = run_gap_targeted_pass(
+            raw_signals = load_raw_signals(raw_json)
+            normalized, uncertain = load_normalized(norm_json)
+            gap_path = json_dir / "scope_gap_pass_audit.json"
+            if gap_path.exists():
+                gap_pass_audit = json.loads(gap_path.read_text(encoding="utf-8"))
+            cmp_path = json_dir / "scope_run_comparison.json"
+            if cmp_path.exists():
+                scope_run_comparison = json.loads(
+                    cmp_path.read_text(encoding="utf-8")
+                )
+            print(
+                f"  -> {len(raw_signals)} segnali raw, "
+                f"{len(normalized)} coppie normalizzate, "
+                f"{len(uncertain)} incerti"
+            )
+            candidates_before_exclusions = fetch_raci_candidates(conn, normalized)
+            print(
+                f"  -> {len(candidates_before_exclusions)} candidati RACI "
+                "ricalcolati dal catalogo"
+            )
+        else:
+            chunk_on = cfg_bool("SCOPE_PASS1_CHUNK_ENABLED", default=False)
+            print(
+                "Step 1: analisi Scope — PDF inviato all'LLM"
+                + (" (chunking attivo)" if chunk_on else "")
+                + "..."
+            )
+            raw_signals = extract_scope_signals(
                 scope_pdfs,
                 conn,
-                vocab,
-                normalized,
-                model=args.scope_pass2_llm_model,
+                raw_json,
+                output_dir,
+                model=args.scope_llm_model,
             )
-            normalized = consensus_signals
-            if gap_raw:
-                raw_signals.extend(gap_raw)
-            save_json(json_dir / "scope_gap_pass_audit.json", gap_pass_audit)
-        else:
-            save_json(
-                json_dir / "scope_gap_pass_audit.json",
-                {
-                    "enabled": False,
-                    "reason": "SCOPE_PASS2_ENABLED=false or --no-scope-pass2",
-                },
-            )
+            print(f"  -> {len(raw_signals)} segnali (discipline/chapter RACI)")
 
-        normalized = consolidate_normalized_signals(normalized)
-        candidates_before_exclusions = fetch_raci_candidates(conn, normalized)
-        if pass2_enabled:
-            scope_run_comparison = compare_with_previous_run(
-                gap_pass_audit,
-                output_dir / "runs",
-                project,
-                current_candidate_count=len(candidates_before_exclusions),
+            print("Step 2: validazione coppie (disciplina+capitolo) su catalogo RACI...")
+            vocab = load_raci_vocabulary(conn)
+            normalized, uncertain = normalize_signals(
+                raw_signals,
+                vocab.discipline_codes,
+                vocab.chapter_names,
+                vocab.canonical_pairs,
             )
-        else:
-            scope_run_comparison = {
-                "available": False,
-                "reason": "scope_pass2_disabled",
-            }
-        save_scope_comparison(
-            json_dir / "scope_run_comparison.json", scope_run_comparison
-        )
-        if raw_signals:
-            scope_payload: dict = {}
-            if raw_json.exists():
-                scope_payload = json.loads(raw_json.read_text(encoding="utf-8"))
-            scope_payload["signals"] = [s.to_dict() for s in raw_signals]
-            save_json(raw_json, scope_payload)
-        save_normalized(normalized, uncertain, norm_json)
+            print(f"  -> {len(normalized)} segnali validi, {len(uncertain)} incerti")
+
+            if pass2_enabled:
+                print(
+                    "Step 3: verifica catalogo RACI (soggetto documentale in progetto; "
+                    "esclusioni = Step 4)..."
+                )
+                consensus_signals, gap_pass_audit, gap_raw = run_gap_targeted_pass(
+                    scope_pdfs,
+                    conn,
+                    vocab,
+                    normalized,
+                    model=args.scope_pass2_llm_model,
+                )
+                normalized = consensus_signals
+                if gap_raw:
+                    raw_signals.extend(gap_raw)
+                save_json(json_dir / "scope_gap_pass_audit.json", gap_pass_audit)
+            else:
+                save_json(
+                    json_dir / "scope_gap_pass_audit.json",
+                    {
+                        "enabled": False,
+                        "reason": "SCOPE_PASS2_ENABLED=false or --no-scope-pass2",
+                    },
+                )
+
+            normalized = consolidate_normalized_signals(normalized)
+            candidates_before_exclusions = fetch_raci_candidates(conn, normalized)
+            if pass2_enabled:
+                scope_run_comparison = compare_with_previous_run(
+                    gap_pass_audit,
+                    output_dir / "runs",
+                    project,
+                    current_candidate_count=len(candidates_before_exclusions),
+                )
+            else:
+                scope_run_comparison = {
+                    "available": False,
+                    "reason": "scope_pass2_disabled",
+                }
+            save_scope_comparison(
+                json_dir / "scope_run_comparison.json", scope_run_comparison
+            )
+            if raw_signals:
+                scope_payload: dict = {}
+                if raw_json.exists():
+                    scope_payload = json.loads(raw_json.read_text(encoding="utf-8"))
+                scope_payload["signals"] = [s.to_dict() for s in raw_signals]
+                save_json(raw_json, scope_payload)
+            save_normalized(normalized, uncertain, norm_json)
         if args.scope_only:
             usage = build_usage_summary()
             save_usage_audit(json_dir, usage)

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+import json
+from dataclasses import fields, replace
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .models import NormalizedSignal, RawScopeSignal, UncertainMapping
 from .utils import save_json
@@ -375,3 +376,29 @@ def save_normalized(
             "uncertain": [u.to_dict() for u in uncertain],
         },
     )
+
+
+def _dataclass_from_dict(cls, row: Dict[str, Any]):
+    allowed = {item.name for item in fields(cls)}
+    return cls(**{key: value for key, value in row.items() if key in allowed})
+
+
+def load_normalized(
+    path: Path,
+) -> Tuple[List[NormalizedSignal], List[UncertainMapping]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    normalized = [
+        _dataclass_from_dict(NormalizedSignal, row)
+        for row in payload.get("normalized") or []
+    ]
+    uncertain = [
+        _dataclass_from_dict(UncertainMapping, row)
+        for row in payload.get("uncertain") or []
+    ]
+    return normalized, uncertain
+
+
+def load_raw_signals(path: Path) -> List[RawScopeSignal]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload.get("signals") or []
+    return [_dataclass_from_dict(RawScopeSignal, row) for row in rows]

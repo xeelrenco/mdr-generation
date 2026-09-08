@@ -6,11 +6,13 @@ import base64
 import hashlib
 import io
 import json
+import threading
 import time
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 from pypdf import PdfReader, PdfWriter
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -60,6 +62,8 @@ def is_transient_llm_error(error: BaseException) -> bool:
         "service unavailable",
         "connection reset",
         "connection aborted",
+        "connection error",
+        "disconnected",
         "timed out",
         "timeout",
     )
@@ -361,7 +365,28 @@ def _record_claude_usage(message: Any, model: str, stage: str, call_type: str) -
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+@contextmanager
+def _openai_client(api_key: str) -> Iterator[Any]:
+    """Client HTTP senza keep-alive: OpenAI chiude spesso le connessioni pooled sui PDF."""
+    import httpx
+    from openai import OpenAI
+
+    http_client = httpx.Client(
+        timeout=httpx.Timeout(1200.0, connect=60.0),
+        limits=httpx.Limits(max_keepalive_connections=0, max_connections=20),
+    )
+    try:
+        yield OpenAI(
+            api_key=api_key,
+            http_client=http_client,
+            max_retries=4,
+            timeout=1200.0,
+        )
+    finally:
+        http_client.close()
+
+
+@retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=2, min=5, max=90))
 def _call_openai_pdf(
     prompt: str,
     pdf_path: Path,
@@ -372,10 +397,7 @@ def _call_openai_pdf(
     *,
     stage: str = "pass1_scope",
 ) -> Dict[str, Any]:
-    from openai import OpenAI
-
     b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
-    client = OpenAI(api_key=api_key)
     create_kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [
@@ -397,7 +419,8 @@ def _call_openai_pdf(
     }
     if _openai_supports_custom_temperature(model):
         create_kwargs["temperature"] = stage_temperature(stage)
-    response = client.chat.completions.create(**create_kwargs)
+    with _openai_client(api_key) as client:
+        response = client.chat.completions.create(**create_kwargs)
     _record_openai_usage(response, model, stage, "pdf")
     return parse_json_response(response.choices[0].message.content or "{}")
 
@@ -442,13 +465,79 @@ def _call_gemini_pdf(
     return parse_json_response(getattr(response, "text", None) or "{}")
 
 
+def _claude_model_key(model: str) -> str:
+    return (model or "").lower().replace("_", "-")
+
+
 def _claude_supports_custom_temperature(model: str) -> bool:
-    """Opus 4.7+ non accetta più temperature esplicita."""
-    m = model.lower()
-    return not any(
+    """False se il modello rifiuta temperature non-default (HTTP 400)."""
+    m = _claude_model_key(model)
+    if any(
         marker in m
-        for marker in ("opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8")
+        for marker in (
+            "fable",
+            "mythos",
+            "opus-4-7",
+            "opus-4.7",
+            "opus-4-8",
+            "opus-4.8",
+        )
+    ):
+        return False
+    # sonnet-5 / opus-5, non sonnet-4-5 / opus-4-5
+    if "sonnet-5" in m:
+        return False
+    if "opus-5" in m:
+        return False
+    return True
+
+
+def _claude_supports_effort(model: str) -> bool:
+    """Haiku 4.5 non ha effort; Sonnet 5 / Opus 5 / 4.6+ sì."""
+    m = _claude_model_key(model)
+    if "haiku" in m:
+        return False
+    return any(
+        marker in m
+        for marker in (
+            "sonnet-5",
+            "opus-5",
+            "fable",
+            "mythos",
+            "sonnet-4-6",
+            "opus-4-6",
+            "opus-4-7",
+            "opus-4-8",
+        )
     )
+
+
+def _claude_effort_for_stage(stage: str) -> str:
+    """Catalogo pass 2: JSON presente/assente — low per contenere il thinking adattivo."""
+    if (stage or "").startswith("pass3_catalog_"):
+        return "low"
+    return "medium"
+
+
+def _claude_message_kwargs(
+    model: str,
+    *,
+    stage: str,
+    system: str,
+    messages: List[Dict[str, Any]],
+    max_output_tokens: int,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_output_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if _claude_supports_custom_temperature(model):
+        kwargs["temperature"] = stage_temperature(stage)
+    if _claude_supports_effort(model):
+        kwargs["output_config"] = {"effort": _claude_effort_for_stage(stage)}
+    return kwargs
 
 
 def _is_anthropic_rate_limit_error(ex: BaseException) -> bool:
@@ -494,14 +583,13 @@ def _call_claude_pdf(
     ]
 
     max_output_tokens = max(4096, cfg_int("CLAUDE_MAX_TOKENS", 16384))
-    create_kwargs: Dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_output_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": content}],
-    }
-    if _claude_supports_custom_temperature(model):
-        create_kwargs["temperature"] = stage_temperature(stage)
+    create_kwargs = _claude_message_kwargs(
+        model,
+        stage=stage,
+        system=system,
+        messages=[{"role": "user", "content": content}],
+        max_output_tokens=max_output_tokens,
+    )
     max_retries = 5
     base_wait = 60
     message = None
@@ -554,7 +642,7 @@ def _invoke_llm_pdf(
         api_key = cfg("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY richiesta per provider LLM claude")
-        resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+        resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-5")
         return _call_claude_pdf(prompt, pdf_bytes, resolved, api_key, stage=stage)
     if provider != "openai":
         raise RuntimeError(f"Provider LLM scope non supportato: {provider}")
@@ -573,13 +661,10 @@ def _invoke_llm_pdf(
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30))
+@retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=2, min=5, max=90))
 def _call_openai_text(
     prompt: str, model: str, api_key: str, *, stage: str = "pass9_scalable"
 ) -> Dict[str, Any]:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
     create_kwargs: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -587,7 +672,8 @@ def _call_openai_text(
     }
     if _openai_supports_custom_temperature(model):
         create_kwargs["temperature"] = stage_temperature(stage)
-    response = client.chat.completions.create(**create_kwargs)
+    with _openai_client(api_key) as client:
+        response = client.chat.completions.create(**create_kwargs)
     _record_openai_usage(response, model, stage, "text")
     return parse_json_response(response.choices[0].message.content or "{}")
 
@@ -634,14 +720,13 @@ def _call_claude_text(
         "Respond with valid JSON only: no markdown fences, no prose outside the JSON object."
     )
     max_output_tokens = max(4096, cfg_int("CLAUDE_MAX_TOKENS", 16384))
-    create_kwargs: Dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_output_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if _claude_supports_custom_temperature(model):
-        create_kwargs["temperature"] = stage_temperature(stage)
+    create_kwargs = _claude_message_kwargs(
+        model,
+        stage=stage,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+        max_output_tokens=max_output_tokens,
+    )
     message = client.messages.create(**create_kwargs)
     _record_claude_usage(message, model, stage, "text")
     raw_text = _extract_anthropic_text(message)
@@ -663,7 +748,7 @@ def _invoke_llm_text(
         api_key = cfg("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY richiesta per provider LLM claude")
-        resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-4-6")
+        resolved = model or cfg("CLAUDE_MODEL", "claude-sonnet-5")
         return _call_claude_text(prompt, resolved, api_key, stage=stage)
     if provider != "openai":
         raise RuntimeError(f"Provider LLM scope non supportato: {provider}")
@@ -735,6 +820,80 @@ def _run_chunk_primary_pass(
         job.page_end,
         strict=False,
     )
+
+
+def _format_llm_error(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _run_chunk_pass_resilient(
+    job: _ChunkPassJob,
+    runner: Callable[[_ChunkPassJob], Tuple[_ChunkPassJob, List[RawScopeSignal]]],
+    *,
+    label: str,
+    describe: Callable[[_ChunkPassJob], str],
+    failed_jobs: List[_ChunkPassJob],
+    fail_lock: threading.Lock,
+) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+    try:
+        return runner(job)
+    except Exception as exc:
+        if not is_transient_llm_error(exc):
+            raise
+        pipeline_log(
+            f"  [{label}] FAIL {describe(job)} — {_format_llm_error(exc)}"
+        )
+        with fail_lock:
+            failed_jobs.append(job)
+        return job, []
+
+
+def _retry_chunk_jobs_sequential(
+    jobs: List[_ChunkPassJob],
+    runner: Callable[[_ChunkPassJob], Tuple[_ChunkPassJob, List[RawScopeSignal]]],
+    *,
+    label: str,
+    describe: Callable[[_ChunkPassJob], str],
+) -> Dict[int, List[RawScopeSignal]]:
+    recovered: Dict[int, List[RawScopeSignal]] = {}
+    seen_idx: Set[int] = set()
+    for job in jobs:
+        if job.idx in seen_idx:
+            continue
+        seen_idx.add(job.idx)
+        pipeline_log(
+            f"  [{label}] split dopo fail parallelo {describe(job)}"
+        )
+        span = job.page_end - job.page_start + 1
+        if span <= 4:
+            recovered[job.idx] = []
+            pipeline_log(
+                f"  [{label}] SKIP {describe(job)} (nessuno split ulteriore)"
+            )
+            continue
+        mid = (job.page_start + job.page_end) // 2
+        merged: List[RawScopeSignal] = []
+        for half in (
+            _ChunkPassJob(job.idx, job.page_start, mid),
+            _ChunkPassJob(job.idx, mid + 1, job.page_end),
+        ):
+            pipeline_log(
+                f"  [{label}] split {describe(job)} -> pagine {half.page_start}-{half.page_end}"
+            )
+            try:
+                _, signals = runner(half)
+                merged.extend(signals)
+                pipeline_log(
+                    f"  [{label}] split OK pagine {half.page_start}-{half.page_end}"
+                    f" -> {len(signals)} segnali"
+                )
+            except Exception as exc:
+                pipeline_log(
+                    f"  [{label}] SKIP pagine {half.page_start}-{half.page_end}"
+                    f" — {_format_llm_error(exc)}"
+                )
+        recovered[job.idx] = merged
+    return recovered
 
 
 def _run_chunk_repass(
@@ -890,7 +1049,9 @@ def _extract_scope_chunked(
         for idx, (page_start, page_end) in enumerate(ranges)
     ]
 
-    def _primary_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+    def _primary_runner(
+        job: _ChunkPassJob,
+    ) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
         return _run_chunk_primary_pass(
             job,
             pdf_path,
@@ -902,6 +1063,19 @@ def _extract_scope_chunked(
             resolved_source_label,
         )
 
+    failed_primary: List[_ChunkPassJob] = []
+    fail_lock = threading.Lock()
+
+    def _primary_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+        return _run_chunk_pass_resilient(
+            job,
+            _primary_runner,
+            label="pass1 chunk",
+            describe=_chunk_desc,
+            failed_jobs=failed_primary,
+            fail_lock=fail_lock,
+        )
+
     primary_results = run_parallel(
         primary_jobs,
         _primary_fn,
@@ -910,6 +1084,17 @@ def _extract_scope_chunked(
         describe=_chunk_desc,
         result_note=_chunk_note,
     )
+    if failed_primary:
+        recovered = _retry_chunk_jobs_sequential(
+            failed_primary,
+            _primary_runner,
+            label="pass1 chunk",
+            describe=_chunk_desc,
+        )
+        primary_results = [
+            (job, recovered[job.idx]) if job.idx in recovered else (job, signals)
+            for job, signals in primary_results
+        ]
     chunk_signals_by_idx: Dict[int, List[RawScopeSignal]] = {}
     repass_jobs: List[_ChunkPassJob] = []
     repass_skipped: Dict[int, str] = {}
@@ -935,7 +1120,9 @@ def _extract_scope_chunked(
 
     repass_signals_by_idx: Dict[int, List[RawScopeSignal]] = {}
     if repass_jobs:
-        def _repass_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+        def _repass_runner(
+            job: _ChunkPassJob,
+        ) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
             return _run_chunk_repass(
                 job,
                 pdf_path,
@@ -947,6 +1134,18 @@ def _extract_scope_chunked(
                 resolved_source_label,
             )
 
+        failed_repass: List[_ChunkPassJob] = []
+
+        def _repass_fn(job: _ChunkPassJob) -> Tuple[_ChunkPassJob, List[RawScopeSignal]]:
+            return _run_chunk_pass_resilient(
+                job,
+                _repass_runner,
+                label="pass1 re-pass",
+                describe=_chunk_desc,
+                failed_jobs=failed_repass,
+                fail_lock=fail_lock,
+            )
+
         repass_results = run_parallel(
             repass_jobs,
             _repass_fn,
@@ -955,6 +1154,19 @@ def _extract_scope_chunked(
             describe=_chunk_desc,
             result_note=_chunk_note,
         )
+        if failed_repass:
+            recovered_repass = _retry_chunk_jobs_sequential(
+                failed_repass,
+                _repass_runner,
+                label="pass1 re-pass",
+                describe=_chunk_desc,
+            )
+            repass_results = [
+                (job, recovered_repass[job.idx])
+                if job.idx in recovered_repass
+                else (job, signals)
+                for job, signals in repass_results
+            ]
         for job, repass_signals in sorted(repass_results, key=lambda x: x[0].idx):
             repass_signals_by_idx[job.idx] = repass_signals
             _merge_chunk_signals(repass_signals, seen, all_signals, signal_index)

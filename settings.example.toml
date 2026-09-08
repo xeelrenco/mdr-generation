@@ -22,7 +22,7 @@ chunk_repass_min_chars = 200
 
 [scope.pass2]
 enabled = true
-llm_model = "claude-sonnet-4-6"  # verifica catalogo indipendente dal pass 1
+llm_model = "claude-sonnet-5"  # verifica catalogo indipendente dal pass 1
 arbiter_llm_model = "gemini-3.1-pro-preview"  # solo sui disaccordi/unknown tra pass 1 e pass 2
 batch_size = 30
 workers = 4
@@ -37,7 +37,7 @@ model = "gpt-5.5"
 
 [providers.claude]
 api_key = ""
-model = "claude-haiku-4-5"
+model = "claude-sonnet-5"
 max_tokens = 16384
 
 [providers.vertex]
@@ -93,6 +93,9 @@ llm_model = ""  # vuoto = usa scope.pass1.llm_model
 # [llm_pricing.gemini_2_5_flash]
 # input_per_1m = 0.30
 # output_per_1m = 2.50
+# [llm_pricing.claude_sonnet_5]
+# input_per_1m = 2.00
+# output_per_1m = 10.00
 # [llm_pricing.claude_sonnet_4_6]
 # input_per_1m = 3.00
 # output_per_1m = 15.00

@@ -70,7 +70,7 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
 
     claude = providers.get("claude") or {}
     set_key("ANTHROPIC_API_KEY", claude.get("api_key", ""))
-    set_key("CLAUDE_MODEL", claude.get("model", "claude-sonnet-4-6"))
+    set_key("CLAUDE_MODEL", claude.get("model", "claude-sonnet-5"))
     set_key("CLAUDE_MAX_TOKENS", claude.get("max_tokens", 16384))
 
     vertex = providers.get("vertex") or {}
