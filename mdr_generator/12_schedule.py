@@ -31,11 +31,22 @@ HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
 
 SCHEDULE_DISABLED_REASON = "schedule.enabled=false or --no-schedule"
 
+# Renco 2026-09-09: Summary before List; List depends on Summary.
+# Drop the reverse catalog edge that created the only known predecessor cycle.
+# No-op if that row has already been deleted from DocumentPredecessors.
+_DROPPED_PREDECESSOR_EDGES: Set[Tuple[str, str]] = {
+    ("equipment summary", "equipment list"),
+}
+
+
+def _is_dropped_predecessor_edge(doc_key: str, pred_key: str) -> bool:
+    return (doc_key, pred_key) in _DROPPED_PREDECESSOR_EDGES
+
 
 def _load_predecessor_graph(
     conn: duckdb.DuckDBPyConnection,
     title_keys: Set[str],
-) -> Tuple[Dict[str, Set[str]], List[dict]]:
+) -> Tuple[Dict[str, Set[str]], List[dict], List[dict]]:
     rows = conn.execute(
         """
         SELECT DocumentTitleKey, PredecessorTitleKey
@@ -47,8 +58,19 @@ def _load_predecessor_graph(
 
     preds: Dict[str, Set[str]] = defaultdict(set)
     audit_edges: List[dict] = []
+    dropped_edges: List[dict] = []
     for doc_key, pred_key in rows:
         if not doc_key or not pred_key:
+            continue
+        if _is_dropped_predecessor_edge(doc_key, pred_key):
+            dropped_edges.append(
+                {
+                    "document": doc_key,
+                    "predecessor": pred_key,
+                    "issue": "dropped_cycle_edge",
+                    "reason": "summary_before_list",
+                }
+            )
             continue
         preds[doc_key].add(pred_key)
         if pred_key not in title_keys:
@@ -59,7 +81,7 @@ def _load_predecessor_graph(
                     "issue": "missing_predecessor_in_mdr",
                 }
             )
-    return preds, audit_edges
+    return preds, audit_edges, dropped_edges
 
 
 def _topological_order(
@@ -273,7 +295,7 @@ def _schedule_line_items(
     json_dir: Path,
 ) -> Tuple[List[MdrLineItem], dict]:
     title_keys = {i.raci_title_key for i in line_items if i.raci_title_key}
-    preds, edge_audit = _load_predecessor_graph(conn, title_keys)
+    preds, edge_audit, dropped_edges = _load_predecessor_graph(conn, title_keys)
     topo, cycle_audit = _topological_order(title_keys, preds)
     rank = {key: idx for idx, key in enumerate(topo)}
     cycle_nodes: Set[str] = set()
@@ -362,6 +384,7 @@ def _schedule_line_items(
         "project_start": start_date.isoformat(),
         "topological_order": topo,
         "missing_predecessor_edges": edge_audit,
+        "dropped_predecessor_edges": dropped_edges,
         "cycle_audit": cycle_audit,
         "scheduled_rows": sum(1 for i in line_items if i.planned_start),
         "debug_by_title_key": debug_by_key,

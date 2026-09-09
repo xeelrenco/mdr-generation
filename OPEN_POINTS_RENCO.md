@@ -18,39 +18,30 @@ Checklist di decisioni aperte sul generatore MDR. Aggiornare quando Renco rispon
 
 ---
 
-### 2. Cicli nei predecessori RACI (dati)
+### 2. Cicli nei predecessori RACI (dati) — deciso
 
-**Problema:** nel catalogo `raci_matrix.DocumentPredecessors` esistono dipendenze circolari (es. `equipment list` ↔ `equipment summary`). Un grafo con cicli non ammette un ordine topologico valido.
+**Decisione Renco 2026-09-09:** prima `equipment summary`, poi `equipment list`. List dipende da Summary.
 
-**Da chiedere:** quale arco del ciclo va rimosso o invertito nel RACI? Serve correzione dei dati sorgente.
+Arco da eliminare nel catalogo: `equipment summary` ← `equipment list`.
+Arco da tenere: `equipment list` ← `equipment summary`.
 
-**Evidenza:** flag `cycle` in colonna `DBG_Flags` (se `schedule.debug_columns = true`); audit in `output/.../schedule_audit.json` → `cycle_audit`.
+**Pipeline:** `12_schedule.py` ignora l’arco inverso (`dropped_cycle_edge`) anche se la riga è ancora in `DocumentPredecessors`, così lo scheduling non dipende dal fallback alfabetico.
+
+**Evidenza:** `schedule_audit.json` → `dropped_predecessor_edges`; flag `cycle` solo se resta un ciclo diverso.
 
 ---
 
 ### 3. Politica di fallback quando resta un ciclo
 
-**Comportamento attuale** (dopo il sort topologico sui nodi aciclici):
+Il fallback alfabetico resta **solo** per cicli sconosciuti. Non deve più applicarsi alla coppia Equipment List / Summary.
 
-1. I nodi coinvolti nel ciclo vengono aggiunti in coda in **ordine alfabetico** per `TitleKey`.
+**Comportamento residuo** (dopo il sort topologico sui nodi aciclici):
+
+1. I nodi coinvolti in un ciclo non corretto vengono aggiunti in coda in **ordine alfabetico** per `TitleKey`.
 2. Per ogni documento, entrano nel calcolo solo i predecessori **già processati** (`finish_by_key`).
-3. Il predecessore ciclico che viene **dopo** in ordine alfabetico viene di fatto **ignorato** per il nodo processato per primo.
-4. **Nessun documento viene escluso** dal calcolo date; le date risultano **asimmetriche** rispetto al ciclo.
+3. **Nessun documento viene escluso** dal calcolo date.
 
-**Esempio:** `equipment list` → `equipment summary` (ciclo bidirezionale)
-
-| Documento           | Ordine fallback | Effetto                                      |
-|---------------------|-----------------|----------------------------------------------|
-| `equipment list`    | 1° (alfabetico) | Non aspetta `equipment summary`              |
-| `equipment summary` | 2°              | Aspetta il finish di `equipment list`        |
-
-**Da chiedere:** va bene questo fallback, oppure preferiscono:
-
-- errore / blocco generazione MDR se c’è un ciclo;
-- scelta esplicita di quale arco ignorare (non alfabetico);
-- altro criterio (es. priorità per disciplina/capitolo).
-
-**Riferimento codice:** `mdr_generator/12_schedule.py` — `_topological_order`, `_schedule_line_items`.
+**Riferimento codice:** `mdr_generator/12_schedule.py` — `_DROPPED_PREDECESSOR_EDGES`, `_topological_order`.
 
 ---
 
@@ -61,7 +52,8 @@ Checklist di decisioni aperte sul generatore MDR. Aggiornare quando Renco rispon
 | Separatore titolo MDR  | Solo `\|` per suffissi 3b e 3d     |
 | Lingua suffissi titoli | Inglese (prompt 3b/3d)             |
 | Colonne debug schedule | `schedule.debug_columns` in settings |
+| Ciclo List ↔ Summary   | Summary prima; List dipende da Summary |
 
 ---
 
-*Ultimo aggiornamento: 2026-07-27*
+*Ultimo aggiornamento: 2026-09-09*
