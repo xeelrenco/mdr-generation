@@ -156,6 +156,12 @@ class ScopeExclusionTests(unittest.TestCase):
         self.assertIn("HARD NO for drop_not_in_project", prompt)
         self.assertIn("ASSUNTORE", prompt)
         self.assertIn("vote keep", prompt)
+        self.assertIn("Existing Client-owned plant systems", prompt)
+        self.assertIn("this is NOT case 1", prompt)
+        self.assertIn("existing DCS", prompt)
+        self.assertIn("existing MCC", prompt)
+        self.assertIn("electrical substation", prompt)
+        self.assertIn("existing Client plant system under case 2", prompt)
         self.assertNotIn("exclude_level", prompt)
         self.assertNotIn('"label"', prompt)
 

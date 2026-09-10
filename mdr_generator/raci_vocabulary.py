@@ -119,8 +119,9 @@ def consensus_discovery_exclusion_rule() -> str:
         "Do not omit a pair because construction, installation or supply is assigned "
         "to the Client/Committente, or because an annex is provided by the Client. "
         "Emit the pair when the chapter subject exists in the project; Step 4 votes "
-        "on dumped titles (keep engineering if the Client only executes the work; "
-        "drop Client-issued documents)."
+        "on dumped titles (keep Contractor engineering if the Client only executes "
+        "new-package construction; drop Client-issued annexes and documentation of "
+        "existing Client plant systems such as DCS, MCC or substation)."
     )
 
 
@@ -163,24 +164,45 @@ For each title_key vote exactly one of:
 
 Default is keep. drop_not_in_project is rare and last-resort.
 
-HOW TO VOTE — split execution from documentation:
+HOW TO VOTE — split new-package execution from existing Client systems:
 
-1) Client EXECUTES work (civil construction, cable pulling, panel installation,
-   painting, mechanical completion) but the Contractor may still issue engineering
-   documents (loads, layouts, data sheets, specs, supervision, supply):
+1) Client EXECUTES work on the Contractor's NEW package (civil construction of
+   new foundations, cable pulling, installing Contractor-supplied panels, painting,
+   mechanical completion) but the Contractor still issues engineering documents
+   (loads, layouts, data sheets, specs, supervision, supply OF THAT NEW PACKAGE):
    → vote keep on those engineering documents.
    → vote drop_client_doc only on execution/as-built/erection documents if the SoW
      assigns those documents themselves to the Client.
-   → Never wipe the pair because the Client builds or installs the system.
+   → Example to KEEP: Client adapts the turbine foundation; Contractor must still
+     issue the foundation drawings / load data.
+   → Never wipe the pair because the Client builds or installs the new package.
 
-2) The SoW assigns the DOCUMENTATION itself to the Client (annex provided by the
+2) Existing Client-owned plant systems — this is NOT case 1.
+   If the SoW assigns to the Client the EXISTING plant system itself (modifications,
+   adaptations, integrations, or its documentation), vote drop_client_doc on EVERY
+   title whose SUBJECT is that existing system — including data sheets, specs,
+   inspection sheets, bid evaluations, schedules and layouts. Do not keep them as
+   "engineering" under case 1.
+   Typical existing-system assignments:
+   - existing DCS / ESD / electrical monitoring of the plant (e.g. "modifiche al
+     sistema DCS … a carico della COMMITTENTE");
+   - existing MCC / LV-MV switchboards / new LV columns in the Client substation
+     (adaptation of existing boards is Client work);
+   - works inside the Client electrical substation (installation of boards in SS01,
+     substation layouts, earthing/routing of that substation).
+   KEEP only titles whose subject is the Contractor's NEW machine/package or a
+   dedicated interface of that new machine (new-unit ICSS, generator protection
+   package, a single-line that documents the NEW machine connection).
+   Evidence_quote MUST be the Client-assignment sentence about that existing system.
+
+3) The SoW assigns the DOCUMENTATION itself to the Client (annex provided by the
    Client, "documentazione a carico del Committente", "Allegato N" used as input,
    piping class, P&ID, design basis or lists the Contractor only uses):
    → vote drop_client_doc on those titles only.
    → A Contractor sentence that SAYS it will use a Client annex is drop_client_doc
      for that annex title, not drop_not_in_project.
 
-3) drop_not_in_project — ONLY if the SoW itself denies THIS TITLE'S SUBJECT:
+4) drop_not_in_project — ONLY if the SoW itself denies THIS TITLE'S SUBJECT:
    - explicit absence: "non sono previsti lavori su X", "nessun intervento su X",
      "no modification to existing X", "X is not in this project";
    - OR the SoW limits the plant so that subject cannot exist (e.g. civil works
@@ -188,20 +210,23 @@ HOW TO VOTE — split execution from documentation:
    The evidence_quote MUST be the denying or limiting sentence about that subject.
    Vote this only on titles whose subject is that absent X — not on the whole pair.
 
-4) If WHO executes construction is ambiguous, vote keep.
-   If whether the document is Client-issued is clear, vote drop_client_doc.
+5) If WHO executes construction of the NEW package is ambiguous, vote keep.
+   If the SoW clearly assigns an existing Client system (case 2) or a Client
+   annex (case 3), that is not ambiguous: vote drop_client_doc.
    If whether the TITLE SUBJECT exists in this plant is ambiguous, vote keep
    (pass B of this step drops unsupported catalog subjects).
 
-HARD NO for drop_not_in_project (these are keep, or drop_client_doc if case 2):
+HARD NO for drop_not_in_project (these are keep, or drop_client_doc if case 2 or 3):
 - "Sono incluse nello scopo del lavoro dell'ASSUNTORE / Contractor shall / the
-  Contractor's scope includes..." — that is Contractor work, therefore keep.
+  Contractor's scope includes..." — that is Contractor work, therefore keep
+  unless case 2/3 applies to THIS title's subject.
 - Equipment / activity lists of what the Contractor supplies or installs.
 - The SoW describes the plant (GT2, turbine, generator, auxiliaries, electrical
   installation) but does not name this exact document type or chapter name.
 - Generic chapter titles of this pair (DATA SHEET, SPECIFICATION, REPORT, LIST,
   PROCEDURE, LAYOUT, DESIGN CRITERIA, MATERIAL SUPPLY): keep unless THIS title's
-  equipment/system is the one the SoW explicitly says is absent.
+  equipment/system is the one the SoW explicitly says is absent, OR is an
+  existing Client plant system under case 2.
 
 Rules:
 - Require SoW evidence — do not invent exclusions from general EPC practice.
