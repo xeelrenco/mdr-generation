@@ -64,6 +64,35 @@ def _dec(
 class IdentityHelpersTests(unittest.TestCase):
     def test_tag_aliases_are_the_same_machine(self) -> None:
         self.assertTrue(labels_are_same_instance("P-7515/B", "GT2 P-7515/B"))
+        self.assertTrue(
+            labels_are_same_instance("P-7515/B", "P-7515/B steam turbine")
+        )
+
+    def test_new_steam_turbine_is_alias_of_tagged_machine(self) -> None:
+        clustered = cluster_instance_labels(
+            ["P-7515/B", "New steam turbine"], context="STEAM TURBINES"
+        )
+        self.assertEqual(len(clustered), 1)
+        self.assertTrue(scope.is_generic_machine_alias("New steam turbine"))
+        self.assertFalse(scope.is_generic_machine_alias("P-7515/B"))
+        self.assertFalse(scope.is_generic_machine_alias("Steam Generation Unit 2"))
+
+    def test_generic_alias_does_not_collapse_two_tagged_machines(self) -> None:
+        clustered = cluster_instance_labels(
+            ["P-7515/B", "P-9999/A", "New steam turbine"],
+            context="STEAM TURBINES",
+        )
+        self.assertEqual(len(clustered), 2)
+
+    def test_alias_of_another_family_stays_its_own_unit(self) -> None:
+        clustered = cluster_instance_labels(
+            ["P-7515/B", "New compressor"], context="STEAM TURBINES"
+        )
+        self.assertEqual(len(clustered), 2)
+
+    def test_tagged_and_untagged_alias_still_merge(self) -> None:
+        clustered = cluster_instance_labels(["C-101 Unit 1", "Compressor Unit 1"])
+        self.assertEqual(len(clustered), 1)
 
     def test_numbered_compressor_aliases_are_the_same_unit(self) -> None:
         self.assertTrue(
@@ -114,6 +143,16 @@ class ResolveMergedCountTests(unittest.TestCase):
         self.assertEqual(len(labels), 1)
         self.assertIn("P-7515/B", labels[0].upper().replace(" ", ""))
 
+    def test_new_steam_turbine_and_tag_across_parts_count_as_one(self) -> None:
+        total, labels, mode = resolve_merged_instance_count(
+            [1, 0, 1],
+            [["P-7515/B"], [], ["New steam turbine"]],
+            context="CONSUMABLES FOR STEAM TURBINES",
+        )
+        self.assertEqual(total, 1)
+        self.assertEqual(mode, "label_union")
+        self.assertEqual(len(labels), 1)
+
     def test_overlapping_compressor_aliases_do_not_double(self) -> None:
         total, labels, mode = resolve_merged_instance_count(
             [4, 4, 0],
@@ -163,6 +202,56 @@ class ParseAndMergeTests(unittest.TestCase):
         )
         self.assertEqual(len(specs), 1)
         self.assertEqual(specs[0].label, "P-7515/B")
+
+    def test_same_machine_labels_in_one_excerpt_collapse(self) -> None:
+        specs = _normalize_instances(
+            2,
+            [
+                {"index": 1, "label": "P-7515/B Steam Turbine"},
+                {"index": 2, "label": "Steam Turbine P-7515/B"},
+            ],
+        )
+        merged = scope.dedupe_decision_instances(
+            specs, context="PROCESS DATA SHEET FOR ROTATING EQUIPMENT"
+        )
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].index, 1)
+
+    def test_distinct_machines_in_one_excerpt_are_kept(self) -> None:
+        specs = _normalize_instances(
+            2,
+            [
+                {"index": 1, "label": "P-7515/B"},
+                {"index": 2, "label": "P-9999/A"},
+            ],
+        )
+        merged = scope.dedupe_decision_instances(
+            specs, context="STEAM TURBINES"
+        )
+        self.assertEqual(len(merged), 2)
+
+    def test_parse_collapses_duplicate_machine_instances(self) -> None:
+        cand = _cand("PROCESS DATA SHEET FOR ROTATING EQUIPMENT")
+        decisions, _ = scope._parse_scalable_instance_decisions(
+            {
+                "documents": [
+                    {
+                        "title_key": cand.title_key,
+                        "instance_count": 2,
+                        "instances": [
+                            {"index": 1, "label": "P-7515/B Steam Turbine"},
+                            {"index": 2, "label": "Steam Turbine P-7515/B"},
+                        ],
+                    }
+                ]
+            },
+            [cand],
+            "MAC",
+            "ROTATING EQUIPMENT",
+            "sow.pdf",
+        )
+        self.assertEqual(decisions[0].instance_count, 1)
+        self.assertIn("same_machine_instances_merged", decisions[0].qa_flags)
 
     def test_merge_partial_decisions_uses_union_not_sum(self) -> None:
         cand = _cand()

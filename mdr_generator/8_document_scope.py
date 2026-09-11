@@ -41,6 +41,28 @@ _PLANT_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 _TRAILING_NUM_RE = re.compile(r"(\d+)\s*$")
+# "New steam turbine" / "la turbina" — alias of a tagged machine, not a 2nd unit.
+_GENERIC_MACHINE_ALIAS_RE = re.compile(
+    r"^(?:the\s+|a\s+|an\s+|new\s+|nuovo\s+|nuova\s+|la\s+|il\s+)?"
+    r"(?:steam\s+)?"
+    r"(?P<family>turbine|turbina(?:\s+a\s+vapore)?|compressor|compressore|"
+    r"generator|generatore|alternator|alternatore|package|skid)s?"
+    r"(?:\s+package)?\s*$",
+    re.IGNORECASE,
+)
+# Stem shared by the English and Italian spelling of each machine family.
+_MACHINE_FAMILY_STEMS = {
+    "turbine": "turbin",
+    "turbina": "turbin",
+    "compressor": "compressor",
+    "compressore": "compressor",
+    "generator": "generator",
+    "generatore": "generator",
+    "alternator": "alternator",
+    "alternatore": "alternator",
+    "package": "package",
+    "skid": "skid",
+}
 _WORD_RE = re.compile(r"[a-z]+", re.IGNORECASE)
 _STOPWORDS = frozenset(
     {
@@ -76,6 +98,23 @@ def _trailing_index(label: str) -> Optional[str]:
 
 def _content_tokens(label: str) -> Set[str]:
     return {w.lower() for w in _WORD_RE.findall(label or "")} - _STOPWORDS
+
+
+def generic_machine_alias_family(label: str) -> Optional[str]:
+    """Machine family stem for untagged 'new steam turbine' style names, else None."""
+    text = (label or "").strip()
+    if not text or _specific_tags(text) or _trailing_index(text):
+        return None
+    match = _GENERIC_MACHINE_ALIAS_RE.match(_normalize_label_text(text))
+    if not match:
+        return None
+    head = match.group("family").split()[0]
+    return _MACHINE_FAMILY_STEMS.get(head, head)
+
+
+def is_generic_machine_alias(label: str) -> bool:
+    """True for untagged 'new steam turbine' style names that alias a tagged machine."""
+    return generic_machine_alias_family(label) is not None
 
 
 def is_noise_instance_label(label: str) -> bool:
@@ -125,8 +164,7 @@ def labels_are_same_instance(left: str, right: str) -> bool:
     return False
 
 
-def cluster_instance_labels(labels: Sequence[str]) -> List[str]:
-    """Union-find clustering; keep the most specific label per identity."""
+def _dedupe_label_list(labels: Sequence[str]) -> List[str]:
     items: List[str] = []
     seen: Set[str] = set()
     for raw in labels:
@@ -138,7 +176,13 @@ def cluster_instance_labels(labels: Sequence[str]) -> List[str]:
             continue
         seen.add(key)
         items.append(text)
+    return items
 
+
+def _cluster_by_identity(items: Sequence[str]) -> List[str]:
+    """Union-find clustering; keep the most specific label per identity."""
+    if not items:
+        return []
     parent = list(range(len(items)))
 
     def find(idx: int) -> int:
@@ -176,9 +220,37 @@ def cluster_instance_labels(labels: Sequence[str]) -> List[str]:
     return [max(groups[root], key=spec_score) for root in order]
 
 
+def cluster_instance_labels(
+    labels: Sequence[str],
+    context: str = "",
+) -> List[str]:
+    """Union identities; drop untagged 'new steam turbine' aliases of a tagged machine.
+
+    An alias is dropped only when its machine family is already named by a tagged
+    label or by the document context, so an untagged machine of another family
+    still counts as its own unit.
+    """
+    items = _dedupe_label_list(labels)
+    tagged = [lab for lab in items if _specific_tags(lab)]
+    if tagged:
+        haystack = _normalize_label_text(" ".join(tagged) + " " + (context or ""))
+        items = [
+            lab
+            for lab in items
+            if not _aliases_tagged_machine(lab, haystack)
+        ]
+    return _cluster_by_identity(items)
+
+
+def _aliases_tagged_machine(label: str, haystack: str) -> bool:
+    family = generic_machine_alias_family(label)
+    return bool(family) and family in haystack
+
+
 def resolve_merged_instance_count(
     part_counts: Sequence[int],
     part_labels: Sequence[Sequence[str]],
+    context: str = "",
 ) -> Tuple[int, List[str], str]:
     """Union identities across split SoW parts. Never sum overlapping mentions."""
     flat: List[str] = []
@@ -197,7 +269,7 @@ def resolve_merged_instance_count(
         else:
             unlabeled_counts.append(count)
 
-    clustered = cluster_instance_labels(flat)
+    clustered = cluster_instance_labels(flat, context=context)
     unlabeled_max = max(unlabeled_counts) if unlabeled_counts else 0
     if clustered:
         total = max(len(clustered), unlabeled_max)
@@ -210,6 +282,24 @@ def resolve_merged_instance_count(
     if unlabeled_max:
         return unlabeled_max, [], "unlabeled_max"
     return 1, [], "no_evidence"
+
+
+def dedupe_decision_instances(
+    instances: Sequence[DocumentInstanceSpec],
+    context: str = "",
+) -> List[DocumentInstanceSpec]:
+    """Collapse instances of one document that name the same machine."""
+    labels = [inst.label for inst in instances if (inst.label or "").strip()]
+    if len(labels) < 2:
+        return list(instances)
+    clustered = cluster_instance_labels(labels, context=context)
+    if not clustered or len(clustered) >= len(labels):
+        return list(instances)
+    kept = clustered + [""] * (len(instances) - len(labels))
+    return [
+        DocumentInstanceSpec(index=i, label=label)
+        for i, label in enumerate(kept, start=1)
+    ]
 
 
 def _normalize_instances(
@@ -321,6 +411,14 @@ def _parse_scalable_instance_decisions(
             if count > 0
             else []
         )
+        if count > 1:
+            instances = dedupe_decision_instances(
+                instances, context=f"{cand.title} {chapter_name}"
+            )
+            if len(instances) < count:
+                count = len(instances)
+                qa_flags.append("same_machine_instances_merged")
+                reason = "LLM scalable instance count; same-machine labels merged"
         if count > 1 and is_list_like_title(cand.title, title_key):
             count = 1
             instances = _normalize_instances(1, None)
@@ -427,7 +525,9 @@ def _merge_partial_scalable_decisions(
         part_counts = data["part_counts"] if data else []
         part_labels = data["part_labels"] if data else []
         total, labels, merge_mode = resolve_merged_instance_count(
-            part_counts, part_labels
+            part_counts,
+            part_labels,
+            context=f"{cand.title} {chapter_name}",
         )
         if merge_mode == "no_evidence":
             qa_flags.append("scalable_partial_no_evidence")

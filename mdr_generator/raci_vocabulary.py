@@ -678,9 +678,11 @@ RULES:
 - Do not output documents not in the catalog list.
 - Count distinct deliverable units that need separate MDR rows (equipment tags, trains,
   buildings, areas, packages). One physical machine = 1.
-- Do NOT count: repeated mentions; aliases of the same tag (P-7515/B and GT2 P-7515/B
-  are one machine); internal sections or components of one machine (high/low-pressure
-  section, rotor, casing, bearings, swallowing-capacity subsections).
+- Do NOT count: repeated mentions; aliases of the same tag (P-7515/B, GT2 P-7515/B and
+  "P-7515/B steam turbine" are one machine); an untagged generic name for a machine that
+  this excerpt already identifies by tag ("New steam turbine", "the turbine") — it is
+  that same machine, not a second unit; internal sections or components of one machine
+  (high/low-pressure section, rotor, casing, bearings, swallowing-capacity subsections).
 - Prefer the equipment tag as label when the SoW has one. Do not emit a section/component
   as a separate instance.
 - label must not be generic like "NUM 2" only — leave empty if no meaningful suffix.
