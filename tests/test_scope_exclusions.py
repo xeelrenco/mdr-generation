@@ -183,17 +183,18 @@ class ScopeExclusionTests(unittest.TestCase):
 
     def test_basis_gate_prompt_treats_catalog_name_as_synonym(self):
         prompt = build_sow_basis_gate_prompt(
-            "- technical supply specification for icss | "
-            "TECHNICAL SUPPLY SPECIFICATION FOR INTEGRATED CONTROL AND "
-            "SAFETY SYSTEMS (ICSS) | ICT | ICSS"
+            "- technical data sheets for steam turbines | "
+            "TECHNICAL DATA SHEETS FOR STEAM TURBINES | MAC | STEAM TURBINES"
         )
         self.assertIn("catalog name", prompt)
         self.assertIn("Do NOT require the catalog wording or acronym", prompt)
-        self.assertIn("ICSS", prompt)
-        self.assertIn("Control and Safeguarding System", prompt)
+        self.assertIn("Steam Turbines", prompt)
+        self.assertIn("Turbo-generator", prompt)
+        self.assertIn("lifting-equipment", prompt)
         self.assertIn("duct-bank", prompt)
         self.assertIn("already in scope", prompt)
         self.assertIn("sibling of the chapter", prompt)
+        self.assertNotIn("ICSS", prompt)
 
     def test_mass_drop_guard_is_fail_open(self):
         votes = {

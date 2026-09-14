@@ -276,12 +276,12 @@ Rules:
   same system). It is unsupported only when it is a sibling of the chapter about
   something the SoW never introduces.
 - Do NOT require the catalog wording or acronym to appear in the SoW. Judge what the
-  words refer to. Example: the SoW says the Contractor supplies "the system for
-  supervision, control and protection" of the new machine, or "turbine control and
-  protection"; titles that say ICSS, Integrated Control and Safety System, or
-  Control and Safeguarding System are that same supply — supported. Example of a
-  true unsupported sibling: the same concrete chapter also lists duct-bank or storm-
-  water pit drawings, and the SoW never introduces those works.
+  words refer to. Example of the same subject: the SoW names "the new steam
+  turbine-generator unit" or "gruppo di generazione a vapore"; a data sheet titled
+  Steam Turbines or Turbo-generator is that machine — supported. Example of a true
+  unsupported sibling: the same mechanical chapter also lists lifting-equipment
+  documents, and the SoW never introduces lifting; or a concrete chapter whose SoW
+  works are turbine foundations also lists duct-bank or storm-water pit drawings.
 - Do NOT mark a document unsupported just because the SoW is brief about it: a single
   mention of the system, or the system being an obvious part of the described plant,
   is enough to keep it.
