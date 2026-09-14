@@ -105,3 +105,13 @@ llm_model = ""  # vuoto = usa scope.pass1.llm_model
 # [llm_pricing.claude_haiku_4_5]
 # input_per_1m = 1.00
 # output_per_1m = 5.00
+
+# [voting]
+# Le decisioni binarie prese da un solo modello alla temperature di default del
+# provider non sono riproducibili: sullo stesso conflitto invariato l'arbitro
+# dello Step 3 ha risposto "presente" 3 volte su 6, e lo Step 4 ha votato keep
+# su una run e drop_client_doc su quella dopo per gli stessi documenti. Si
+# ripete la chiamata N volte e si tiene la risposta modale.
+# 1 = nessun voto (comportamento storico).
+# arbiter_votes = 3
+# title_exclusion_votes = 3

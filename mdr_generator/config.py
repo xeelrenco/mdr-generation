@@ -93,6 +93,10 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
         scalable.get("pair_context_max_chars", 40000),
     )
 
+    voting = data.get("voting") or {}
+    set_key("ARBITER_VOTES", voting.get("arbiter_votes", 3))
+    set_key("TITLE_EXCLUSION_VOTES", voting.get("title_exclusion_votes", 3))
+
     title_enrichment = data.get("title_enrichment") or {}
     set_key("TITLE_ENRICHMENT_ENABLED", title_enrichment.get("enabled", True))
     if "apply_suffixes" in title_enrichment:

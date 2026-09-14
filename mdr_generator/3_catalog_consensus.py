@@ -441,6 +441,29 @@ def _aggregate_votes(
     return votes, positives, expected
 
 
+def _majority_pair_votes(
+    pairs: Set[Pair],
+    rounds: Sequence[Dict[Pair, Optional[bool]]],
+) -> Dict[Pair, Optional[bool]]:
+    """Modal verdict per pair across repeated arbiter rounds.
+
+    On an unchanged conflict the arbiter answers present on one round and absent
+    on the next, so a single round decides admission by itself. A tie is left
+    unresolved, which keeps the existing Pass 1 fallback.
+    """
+    merged: Dict[Pair, Optional[bool]] = {}
+    for pair in pairs:
+        present = sum(1 for votes in rounds if votes.get(pair) is True)
+        absent = sum(1 for votes in rounds if votes.get(pair) is False)
+        if present > absent:
+            merged[pair] = True
+        elif absent > present:
+            merged[pair] = False
+        else:
+            merged[pair] = None
+    return merged
+
+
 def _aggregate_verdicts(
     pairs: Iterable[Pair],
     results: Sequence[_VerificationResult],
@@ -705,6 +728,7 @@ def run_gap_targeted_pass(
     arbiter_run_rows: List[Dict[str, Any]] = []
     arbiter_votes: Dict[Pair, Optional[bool]] = {}
     arbiter_positive: Dict[Pair, List[RawScopeSignal]] = {}
+    round_votes: List[Dict[Pair, Optional[bool]]] = []
     if arbiter_pairs:
         pass2_verdicts_by_pair = _aggregate_verdicts(catalog_pairs, verification_results)
         arbiter_context = {
@@ -714,26 +738,43 @@ def run_gap_targeted_pass(
             }
             for pair in arbiter_pairs
         }
+        arbiter_rounds = max(1, cfg_int("ARBITER_VOTES", 3))
         print(
             f"  Step 2c arbitro: {len(arbiter_pairs)} disaccordi/unknown tra "
             f"Pass 1 e Pass 2 ({arbiter_provider}/{arbiter_model}, "
-            "PDF completo + argomenti dei due pass)"
+            f"PDF completo + argomenti dei due pass, {arbiter_rounds} voti)"
         )
-        arbiter_results = _scan_catalog(
-            scope_pdfs,
-            _batch_catalog_pairs(arbiter_pairs, _ARBITER_BATCH_SIZE),
-            arbiter_model,
-            pair_examples,
-            tie_break=True,
-            arbiter=True,
-            arbiter_context=arbiter_context,
-        )
-        for row in _result_audit_rows(arbiter_results):
-            row["arbiter"] = f"{arbiter_provider}/{arbiter_model}"
-            arbiter_run_rows.append(row)
-        arbiter_votes, arbiter_positive, _verdicts = _aggregate_votes(
-            arbiter_pairs, arbiter_results
-        )
+        arbiter_results: List[_VerificationResult] = []
+        round_positive: List[Dict[Pair, List[RawScopeSignal]]] = []
+        for attempt in range(1, arbiter_rounds + 1):
+            attempt_results = _scan_catalog(
+                scope_pdfs,
+                _batch_catalog_pairs(arbiter_pairs, _ARBITER_BATCH_SIZE),
+                arbiter_model,
+                pair_examples,
+                tie_break=True,
+                arbiter=True,
+                arbiter_context=arbiter_context,
+            )
+            for row in _result_audit_rows(attempt_results):
+                row["arbiter"] = f"{arbiter_provider}/{arbiter_model}"
+                row["arbiter_vote_round"] = attempt
+                arbiter_run_rows.append(row)
+            votes, positive, _verdicts = _aggregate_votes(
+                arbiter_pairs, attempt_results
+            )
+            round_votes.append(votes)
+            round_positive.append(positive)
+            arbiter_results.extend(attempt_results)
+
+        arbiter_votes = _majority_pair_votes(arbiter_pairs, round_votes)
+        # Quote the evidence of a round that voted like the majority, so the
+        # supporting signals match the verdict actually applied.
+        for pair, verdict in arbiter_votes.items():
+            for votes, positive in zip(round_votes, round_positive):
+                if votes.get(pair) is verdict and positive.get(pair):
+                    arbiter_positive[pair] = positive[pair]
+                    break
         arbiter_verdicts = _aggregate_verdicts(arbiter_pairs, arbiter_results)
     else:
         arbiter_verdicts = {}
@@ -801,6 +842,11 @@ def run_gap_targeted_pass(
             "final_decision": "present" if pair in final_pairs else "absent",
             "resolution": resolution,
         }
+        row["arbiter_round_votes"] = (
+            [_vote_label(votes.get(pair)) for votes in round_votes]
+            if pair in arbiter_pairs
+            else []
+        )
         row["arbiter_vote"] = (
             _vote_label(arbiter_votes.get(pair))
             if pair in arbiter_pairs

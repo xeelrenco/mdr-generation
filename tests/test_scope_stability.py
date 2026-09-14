@@ -112,6 +112,17 @@ def _result(
 
 class ScopeStabilityTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Questi test coprono la meccanica di un singolo giro dell'arbitro; il
+        # voto ripetuto ha i suoi test in test_perimeter_votes.py.
+        single_round = patch.object(
+            consensus,
+            "cfg_int",
+            side_effect=lambda key, default: (
+                1 if key == "ARBITER_VOTES" else default
+            ),
+        )
+        self.addCleanup(single_round.stop)
+        single_round.start()
         self.a = ("CIV", "CONCRETE")
         self.b = ("ELE", "MOTORS")
         self.c = ("ICT", "DCS")

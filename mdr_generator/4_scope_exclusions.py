@@ -11,11 +11,12 @@ No free-text labels. A pair is wiped only when no titles remain.
 from __future__ import annotations
 
 import hashlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .config import cfg_int
 from .models import NormalizedSignal, RaciCandidate
 from .parallel_workers import llm_parallel_workers, run_parallel
 from .raci_vocabulary import build_title_exclusion_prompt
@@ -89,7 +90,11 @@ def _safe_upload_token(value: str) -> str:
 
 
 def _merge_vote_values(votes: List[str]) -> str:
-    """keep wins; else Client-issued doc; else system absent; else keep."""
+    """keep wins; else Client-issued doc; else system absent; else keep.
+
+    Used within one round, where the votes come from different PDFs and chunks:
+    a title missing from one excerpt is not evidence against it.
+    """
     if VOTE_KEEP in votes:
         return VOTE_KEEP
     if VOTE_DROP_CLIENT_DOC in votes:
@@ -97,6 +102,24 @@ def _merge_vote_values(votes: List[str]) -> str:
     if VOTE_DROP_NOT_IN_PROJECT in votes:
         return VOTE_DROP_NOT_IN_PROJECT
     return VOTE_KEEP
+
+
+def majority_vote_value(round_votes: List[str]) -> str:
+    """Modal vote across repeated rounds of the same question.
+
+    The model answers this call at the provider default temperature, so the same
+    SoW yields keep on one round and drop on the next when both readings are
+    defensible. Across rounds a missing vote is a real disagreement, not missing
+    evidence, so keep must not win by default: only a tie falls back to that.
+    """
+    if not round_votes:
+        return VOTE_KEEP
+    tally = Counter(round_votes)
+    top = max(tally.values())
+    leaders = sorted(vote for vote, hits in tally.items() if hits == top)
+    if len(leaders) == 1:
+        return leaders[0]
+    return _merge_vote_values(leaders)
 
 
 def _jobs_for_pairs(
@@ -179,7 +202,8 @@ def vote_title_exclusions(
     pdf_bytes_by_path = {path: read_scope_pdf_bytes(path) for path in pdf_paths}
     jobs = _jobs_for_pairs(pdf_paths, grouped)
     valid = {c.title_key for c in candidates}
-    raw_votes: Dict[str, List[str]] = defaultdict(list)
+    rounds = max(1, cfg_int("TITLE_EXCLUSION_VOTES", 3))
+    round_vote_maps: List[Dict[str, str]] = []
     quotes: Dict[str, List[str]] = defaultdict(list)
     pages: Dict[str, Set[int]] = defaultdict(set)
     pdfs: Dict[str, List[str]] = defaultdict(list)
@@ -207,113 +231,144 @@ def vote_title_exclusions(
                 "_transient_error": str(error)[:300],
             }
 
-    if len(jobs) == 1:
-        results = [_runner(jobs[0])]
-    else:
-        results = run_parallel(
-            jobs,
-            _runner,
-            max_workers=llm_parallel_workers(),
-            label="4a Esclusioni",
-            describe=lambda job: (
-                f"{job.pair[0]}|{job.pair[1]}"
-                + (f" p{job.part}/{job.part_total}" if job.part_total > 1 else "")
-            ),
-            result_note=lambda _job, result: (
-                "transient"
-                if result[1].get("_transient_error")
-                else f"{len(result[1].get('documents') or [])} voti"
-            ),
-        )
+    def _run_round(attempt: int) -> Dict[str, str]:
+        label = "4a Esclusioni"
+        if rounds > 1:
+            label = f"{label} voto {attempt}/{rounds}"
+        if len(jobs) == 1:
+            results = [_runner(jobs[0])]
+        else:
+            results = run_parallel(
+                jobs,
+                _runner,
+                max_workers=llm_parallel_workers(),
+                label=label,
+                describe=lambda job: (
+                    f"{job.pair[0]}|{job.pair[1]}"
+                    + (f" p{job.part}/{job.part_total}" if job.part_total > 1 else "")
+                ),
+                result_note=lambda _job, result: (
+                    "transient"
+                    if result[1].get("_transient_error")
+                    else f"{len(result[1].get('documents') or [])} voti"
+                ),
+            )
 
-    for job, data in results:
-        if data.get("_transient_error"):
-            audit_rows.append(
-                {
-                    "outcome": "transient_error_fail_open",
-                    "source_pdf": job.pdf_label,
-                    "discipline_code": job.pair[0],
-                    "chapter_name": job.pair[1],
-                    "part": job.part,
-                    "error": data["_transient_error"],
-                }
-            )
-            continue
-        seen_in_job: Set[str] = set()
-        for item in data.get("documents") or []:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("title_key") or "").strip().lower()
-            raw_vote = str(item.get("vote") or "").strip().lower()
-            if key not in valid:
+        round_raw: Dict[str, List[str]] = defaultdict(list)
+        for job, data in results:
+            if data.get("_transient_error"):
                 audit_rows.append(
                     {
-                        "title_key": key,
-                        "outcome": "invalid_title_key",
+                        "outcome": "transient_error_fail_open",
+                        "vote_round": attempt,
                         "source_pdf": job.pdf_label,
-                        "raw": item,
+                        "discipline_code": job.pair[0],
+                        "chapter_name": job.pair[1],
+                        "part": job.part,
+                        "error": data["_transient_error"],
                     }
                 )
                 continue
-            if key not in job.title_keys:
-                audit_rows.append(
-                    {
-                        "title_key": key,
-                        "outcome": "title_key_outside_chunk",
-                        "source_pdf": job.pdf_label,
-                        "raw": item,
-                    }
-                )
-                continue
-            if raw_vote not in VALID_VOTES:
-                warnings[key].append(f"invalid_vote:{raw_vote or 'missing'}")
-                raw_vote = VOTE_KEEP
-            raw_votes[key].append(raw_vote)
-            seen_in_job.add(key)
-            quote = str(item.get("evidence_quote") or "").strip()[:250]
-            if quote:
-                quotes[key].append(quote)
-            for page in item.get("source_pages") or []:
-                try:
-                    pages[key].add(int(page))
-                except (TypeError, ValueError):
+            seen_in_job: Set[str] = set()
+            for item in data.get("documents") or []:
+                if not isinstance(item, dict):
                     continue
-            pdfs[key].append(job.pdf_label)
-            audit_rows.append(
-                {
-                    "title_key": key,
-                    "outcome": raw_vote,
-                    "source_pdf": job.pdf_label,
-                    "discipline_code": job.pair[0],
-                    "chapter_name": job.pair[1],
-                    "reason": quote,
-                }
-            )
-        for key in job.title_keys:
-            if key in seen_in_job:
-                continue
-            warnings[key].append("omitted_fail_open_keep")
-            audit_rows.append(
-                {
-                    "title_key": key,
-                    "outcome": "omitted_keep",
-                    "source_pdf": job.pdf_label,
-                    "discipline_code": job.pair[0],
-                    "chapter_name": job.pair[1],
-                }
-            )
+                key = str(item.get("title_key") or "").strip().lower()
+                raw_vote = str(item.get("vote") or "").strip().lower()
+                if key not in valid:
+                    audit_rows.append(
+                        {
+                            "title_key": key,
+                            "outcome": "invalid_title_key",
+                            "vote_round": attempt,
+                            "source_pdf": job.pdf_label,
+                            "raw": item,
+                        }
+                    )
+                    continue
+                if key not in job.title_keys:
+                    audit_rows.append(
+                        {
+                            "title_key": key,
+                            "outcome": "title_key_outside_chunk",
+                            "vote_round": attempt,
+                            "source_pdf": job.pdf_label,
+                            "raw": item,
+                        }
+                    )
+                    continue
+                if raw_vote not in VALID_VOTES:
+                    warnings[key].append(f"invalid_vote:{raw_vote or 'missing'}")
+                    raw_vote = VOTE_KEEP
+                round_raw[key].append(raw_vote)
+                seen_in_job.add(key)
+                quote = str(item.get("evidence_quote") or "").strip()[:250]
+                if quote:
+                    quotes[key].append(quote)
+                for page in item.get("source_pages") or []:
+                    try:
+                        pages[key].add(int(page))
+                    except (TypeError, ValueError):
+                        continue
+                pdfs[key].append(job.pdf_label)
+                audit_rows.append(
+                    {
+                        "title_key": key,
+                        "outcome": raw_vote,
+                        "vote_round": attempt,
+                        "source_pdf": job.pdf_label,
+                        "discipline_code": job.pair[0],
+                        "chapter_name": job.pair[1],
+                        "reason": quote,
+                    }
+                )
+            for key in job.title_keys:
+                if key in seen_in_job:
+                    continue
+                warnings[key].append("omitted_fail_open_keep")
+                audit_rows.append(
+                    {
+                        "title_key": key,
+                        "outcome": "omitted_keep",
+                        "vote_round": attempt,
+                        "source_pdf": job.pdf_label,
+                        "discipline_code": job.pair[0],
+                        "chapter_name": job.pair[1],
+                    }
+                )
+
+        return {
+            cand.title_key: _merge_vote_values(round_raw.get(cand.title_key) or [])
+            for cand in candidates
+        }
+
+    for attempt in range(1, rounds + 1):
+        round_vote_maps.append(_run_round(attempt))
 
     merged: Dict[str, TitleExclusionVote] = {}
     for cand in candidates:
         key = cand.title_key
-        vote = _merge_vote_values(raw_votes.get(key) or [])
+        cast = [votes.get(key, VOTE_KEEP) for votes in round_vote_maps]
+        vote = majority_vote_value(cast)
+        flags = list(warnings.get(key) or [])
+        if len(set(cast)) > 1:
+            agreement = cast.count(vote)
+            flags.append(f"exclusion_vote_{agreement}_of_{len(cast)}")
+            audit_rows.append(
+                {
+                    "title_key": key,
+                    "outcome": "round_votes_disagree",
+                    "round_votes": cast,
+                    "voted": vote,
+                }
+            )
         merged[key] = TitleExclusionVote(
             title_key=key,
             vote=vote,
             evidence_quote=(quotes.get(key) or [""])[0],
             source_pages=sorted(pages.get(key) or []),
             source_pdfs=_dedupe_strings(pdfs.get(key) or []),
-            parse_warnings=_dedupe_strings(warnings.get(key) or []),
+            parse_warnings=_dedupe_strings(flags),
         )
     return merged, audit_rows
 

@@ -47,6 +47,19 @@ def _vote(key: str, vote: str, quote: str = "") -> exclusions.TitleExclusionVote
 
 
 class ScopeExclusionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Meccanica di un singolo giro di voto; il voto ripetuto ha i suoi test
+        # in test_perimeter_votes.py.
+        single_round = patch.object(
+            exclusions,
+            "cfg_int",
+            side_effect=lambda key, default: (
+                1 if key == "TITLE_EXCLUSION_VOTES" else default
+            ),
+        )
+        self.addCleanup(single_round.stop)
+        single_round.start()
+
     def test_client_execution_keeps_engineering_drops_client_doc(self):
         kept_n, kept_c, dropped_pairs, dropped_docs = (
             exclusions.apply_title_exclusion_votes(
