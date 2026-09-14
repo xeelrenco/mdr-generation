@@ -207,11 +207,24 @@ class DisplayTitleTests(unittest.TestCase):
             "AS BUILT | New Steam Generator | 2",
         )
 
-    def test_shared_sow_title_prefers_label(self) -> None:
+    def test_shared_sow_title_yields_to_instance_label(self) -> None:
+        """Il titolo SoW condiviso su N righe non deve comparire: su N-1 righe
+        nomina l'istanza sbagliata e le fa sembrare duplicate (feedback Renco)."""
         self.assertEqual(
             format_mdr_display_title("AS BUILT", 2, "P-7515/B", "Centrifugal Pump",
                                      disambiguate_shared=True),
-            "AS BUILT | Centrifugal Pump | P-7515/B",
+            "AS BUILT | P-7515/B",
+        )
+        self.assertEqual(
+            format_mdr_display_title(
+                "TECHNICAL BID EVALUATION FOR LOCAL AND POWER DISTRIBUTION PANELS",
+                3,
+                "Generator protection panel",
+                "Turbine Local Control Panel",
+                disambiguate_shared=True,
+            ),
+            "TECHNICAL BID EVALUATION FOR LOCAL AND POWER DISTRIBUTION PANELS"
+            " | Generator protection panel",
         )
 
     def test_distinct_sow_title_has_no_suffix(self) -> None:
@@ -219,6 +232,102 @@ class DisplayTitleTests(unittest.TestCase):
             format_mdr_display_title("AS BUILT", 2, "", "Feed Water Pump"),
             "AS BUILT | Feed Water Pump",
         )
+
+
+class ElementToInstanceMatchingTests(unittest.TestCase):
+    """Caso reale J23210: 4 istanze, 3 nomi SoW. Con l'abbinamento posizionale
+    il nome di P-7506/B finiva sulla pompa olio di emergenza e P-7507/B usciva
+    su due righe."""
+
+    def _pump_decision(self) -> DocumentScopeDecision:
+        return _decision(
+            title_key="technical data sheets for centrifugal pumps",
+            raci_title="TECHNICAL DATA SHEETS FOR CENTRIFUGAL PUMPS",
+            instance_count=4,
+            instances=[
+                DocumentInstanceSpec(index=1, label="P-7513/B"),
+                DocumentInstanceSpec(index=2, label="Emergency electric oil pump"),
+                DocumentInstanceSpec(index=3, label="P-7506/B"),
+                DocumentInstanceSpec(index=4, label="P-7507/B"),
+            ],
+        )
+
+    def test_elements_land_on_their_own_machine(self) -> None:
+        updated, _ = _apply_elements_to_decision(
+            self._pump_decision(),
+            [
+                _element("P-7513/B Auxiliary Oil Pump", label="P-7513/B"),
+                _element("P-7506/B Condensate Extraction Pump", label="P-7506/B"),
+                _element("P-7507/B Condensate Extraction Pump", label="P-7507/B"),
+            ],
+            apply_suffixes=True,
+        )
+        by_label = {i.label: i.sow_specific_title for i in updated.instances}
+        self.assertEqual(by_label["P-7513/B"], "P-7513/B Auxiliary Oil Pump")
+        self.assertEqual(by_label["P-7506/B"], "P-7506/B Condensate Extraction Pump")
+        self.assertEqual(by_label["P-7507/B"], "P-7507/B Condensate Extraction Pump")
+        self.assertEqual(by_label["Emergency electric oil pump"], "")
+
+    def test_no_machine_appears_twice_in_the_rows(self) -> None:
+        updated, _ = _apply_elements_to_decision(
+            self._pump_decision(),
+            [
+                _element("P-7513/B Auxiliary Oil Pump", label="P-7513/B"),
+                _element("P-7506/B Condensate Extraction Pump", label="P-7506/B"),
+                _element("P-7507/B Condensate Extraction Pump", label="P-7507/B"),
+            ],
+            apply_suffixes=True,
+        )
+        items, _ = expand_scope_to_line_items([updated], [_candidate(updated)])
+        self.assertEqual(len(items), 4)
+        titles = [i.mdr_document_title for i in items]
+        self.assertEqual(len({t for t in titles}), 4)
+        self.assertEqual(sum("P-7507/B" in t for t in titles), 1)
+
+    def test_unlabeled_elements_still_fill_by_position(self) -> None:
+        dec = _decision(instance_count=3)
+        updated, _ = _apply_elements_to_decision(
+            dec,
+            [_element("Steam Generator"), _element("Feed Water Pump")],
+            apply_suffixes=True,
+        )
+        self.assertEqual(
+            [i.sow_specific_title for i in updated.instances],
+            ["Steam Generator", "Feed Water Pump", ""],
+        )
+
+
+class SameMachineRowGuardTests(unittest.TestCase):
+    def test_two_rows_naming_one_machine_collapse(self) -> None:
+        dec = _decision(
+            title_key="as built for centrifugal pumps",
+            raci_title="AS BUILT FOR CENTRIFUGAL PUMPS",
+            instance_count=2,
+            instances=[
+                DocumentInstanceSpec(index=1, label="P-7507/B"),
+                DocumentInstanceSpec(
+                    index=2, label="P-7507/B Condensate Extraction Pump"
+                ),
+            ],
+        )
+        items, dup_removed = expand_scope_to_line_items([dec], [_candidate(dec)])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(dup_removed, 1)
+
+    def test_distinct_machines_are_not_collapsed(self) -> None:
+        dec = _decision(
+            title_key="as built for centrifugal pumps",
+            raci_title="AS BUILT FOR CENTRIFUGAL PUMPS",
+            instance_count=3,
+            instances=[
+                DocumentInstanceSpec(index=1, label="P-7506/B"),
+                DocumentInstanceSpec(index=2, label="P-7507/B"),
+                DocumentInstanceSpec(index=3, label="Emergency electric oil pump"),
+            ],
+        )
+        items, dup_removed = expand_scope_to_line_items([dec], [_candidate(dec)])
+        self.assertEqual(len(items), 3)
+        self.assertEqual(dup_removed, 0)
 
 
 class ExpansionNoDedupeTests(unittest.TestCase):

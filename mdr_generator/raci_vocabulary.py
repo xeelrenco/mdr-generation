@@ -683,11 +683,27 @@ RULES:
   this excerpt already identifies by tag ("New steam turbine", "the turbine") — it is
   that same machine, not a second unit; internal sections or components of one machine
   (high/low-pressure section, rotor, casing, bearings, swallowing-capacity subsections).
+- A name for the whole machine train, the unit, the plant or the project is the SAME
+  machine the excerpt already identifies by tag, not an extra one: with "P-7515/B" in the
+  excerpt, "GT2 steam turbine generator group", "the new steam turbine-generator unit",
+  "New Steam Generation Unit" and "the new steam generator project" are all that machine.
+  Judge what the words refer to, not how they end: a word like "unit", "group", "package"
+  or "system" in the name proves nothing by itself.
+- EVERY instance must be a unit OF THIS DOCUMENT'S OWN SUBJECT, which is stated by the
+  document title and by the chapter {chapter_name} this prompt is about. Never itemise a
+  machine into the parts that make it up, and never attach to a document the units that
+  belong to another chapter of the register: a condenser, a pump, a panel or a transformer
+  is not an instance of a document about turbines, even when the SoW lists them together
+  as one supply. Those items are counted under their own chapter, in another call.
+- A system or skid is a unit of a document whose subject IS packaged systems, when the SoW
+  supplies it as one separate package (a lube oil system, an ejector system). Count the
+  package as ONE unit: do not also count the machines inside it.
 - Prefer the equipment tag as label when the SoW has one. Do not emit a section/component
   as a separate instance.
 - label must not be generic like "NUM 2" only — leave empty if no meaningful suffix.
-- LIST / REGISTER / INDEX documents (title contains "list", "register", or "index" as the
-  document type, e.g. Equipment List, Valve List, Cable List): always instance_count=1.
+- LIST / REGISTER / INDEX / SUMMARY documents (the title names the document type, e.g.
+  Equipment List, Valve List, Cable List, Document Register, Instrument Index, Equipment
+  Summary): always instance_count=1. Such a document collects every item in one deliverable.
   Do NOT create one instance per listed tag/item. Only use count>1 if the SoW clearly requires
   distinct list deliverables (e.g. separate lists per train/area), not per equipment item.
 
@@ -826,6 +842,20 @@ SoW SECTION ROUTING:
 - Equipment tags / pump names → data sheets, inspection sheets, equipment specs.
 - Battery limits / systems / packages → P&ID, PFD, diagram RACI.
 - If evidence_quote would come from the wrong section type for the RACI title, omit the element.
+
+WHOSE ITEM IS IT — every element must be something this project delivers:
+- Name the item the Contractor supplies, builds or modifies. An item the SoW presents as
+  already existing, as belonging to the Client, or only as the point the new works connect
+  to, tie into or draw power from, is NOT the subject of a document the Contractor issues.
+  A sentence saying the new loads "may be fed from the existing boards in substation X,
+  subject to verification of the required power" names a source of supply, not a deliverable.
+- When the SoW mentions an existing item and a new item of the same kind, the element is the
+  NEW one. When only the existing item appears, return [] rather than naming it: the document
+  is in scope because of the new item, so an element naming the Client's item contradicts the
+  reason the document exists.
+- An existing place may still disambiguate, when what the Contractor delivers sits there: its
+  new panel inside an existing room, its cables routed through an existing substation, its
+  works in the turbine area. The element names the Contractor's item; the place only locates it.
 
 SUFFIX CONTENT (sow_specific_title):
 - ONLY the project-specific disambiguator; max ~70 chars; English required.

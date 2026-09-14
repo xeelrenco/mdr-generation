@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
+from .config import cfg_int
 from .models import NormalizedSignal, RawScopeSignal
 from .scope_pdf import extract_pdf_pages_text
+
+# Splitting a pair forces the caller to merge partial answers: each part sees only
+# its own excerpt, so one machine named by tag in one part and by description in
+# another is counted twice. Keep the budget above the largest pair so the model
+# decides the quantity on the whole evidence.
+DEFAULT_PAIR_CONTEXT_MAX_CHARS = 40000
 
 
 @dataclass
@@ -144,10 +151,14 @@ def build_pair_sow_context_chunks(
     pdf_bytes_by_name: Dict[str, bytes],
     *,
     max_chars_per_page: int = 2500,
-    max_total_chars: int = 16000,
+    max_total_chars: Optional[int] = None,
 ) -> Tuple[List[str], dict]:
     """Build one or more SoW context chunks for a pair (full text, split if needed)."""
     disc, chap = pair
+    if max_total_chars is None:
+        max_total_chars = cfg_int(
+            "PAIR_CONTEXT_MAX_CHARS", DEFAULT_PAIR_CONTEXT_MAX_CHARS
+        )
     snippets = collect_pair_evidence(pair, raw_signals, normalized)
 
     pages_by_pdf: Dict[str, Set[int]] = {}

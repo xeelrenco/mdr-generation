@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import replace
 from typing import Dict, List, Set, Tuple
 
@@ -12,6 +13,11 @@ from .models import (
     MdrLineItem,
     RaciCandidate,
 )
+
+# Step 6 owns machine identity; il modulo ha il prefisso numerico nel nome.
+labels_are_same_instance = importlib.import_module(
+    "mdr_generator.8_document_scope"
+).labels_are_same_instance
 
 
 def _instance_specs(dec: DocumentScopeDecision) -> List[DocumentInstanceSpec]:
@@ -43,6 +49,15 @@ def _instance_specs(dec: DocumentScopeDecision) -> List[DocumentInstanceSpec]:
     ]
 
 
+def _title_suffix(raci_title: str, mdr_title: str) -> str:
+    """The part the client reads as the instance: everything after the RACI title."""
+    base = (raci_title or "").strip()
+    text = (mdr_title or "").strip()
+    if base and text.lower().startswith(base.lower()):
+        return text[len(base):].lstrip(" |").strip()
+    return ""
+
+
 def expand_scope_to_line_items(
     decisions: List[DocumentScopeDecision],
     candidates: List[RaciCandidate],
@@ -51,6 +66,7 @@ def expand_scope_to_line_items(
     cand_map: Dict[str, RaciCandidate] = {c.title_key: c for c in candidates}
     line_items: List[MdrLineItem] = []
     seen_keys: Set[str] = set()
+    suffixes_by_title: Dict[str, List[str]] = {}
     dup_removed = 0
 
     for dec in decisions:
@@ -80,6 +96,19 @@ def expand_scope_to_line_items(
             if dedupe_key in seen_keys:
                 dup_removed += 1
                 continue
+            # Ultima rete: due righe dello stesso documento che nominano la
+            # stessa macchina con parole diverse ("P-7507/B" e "P-7507/B
+            # Condensate Extraction Pump") sono un duplicato per il cliente,
+            # da qualunque step arrivi la differenza.
+            suffix = _title_suffix(dec.raci_title, mdr_title)
+            if suffix and any(
+                labels_are_same_instance(suffix, prev)
+                for prev in suffixes_by_title.get(dec.title_key, [])
+            ):
+                dup_removed += 1
+                continue
+            if suffix:
+                suffixes_by_title.setdefault(dec.title_key, []).append(suffix)
             seen_keys.add(dedupe_key)
 
             line_items.append(

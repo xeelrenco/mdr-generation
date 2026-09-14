@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import importlib
+
 from .config import cfg, cfg_bool, cfg_int
 from .models import DocumentInstanceSpec, DocumentScopeDecision, NormalizedSignal, RawScopeSignal
 from .mdr_title import is_list_like_title
@@ -21,6 +23,11 @@ from .title_enrichment_examples import (
 from .utils import save_json
 
 _CONFIDENCE_RANK = {"strong": 3, "medium": 2, "weak": 1, "": 0}
+
+# Step 6 owns machine identity; il modulo ha il prefisso numerico nel nome.
+labels_are_same_instance = importlib.import_module(
+    "mdr_generator.8_document_scope"
+).labels_are_same_instance
 
 # P4: suffissi a livello impianto/unità (es. "New Steam Generation Unit") non
 # discriminano le istanze. Nessuna whitelist per-progetto: si riconosce la coda
@@ -125,6 +132,46 @@ def _parse_sow_elements(
     return out
 
 
+def _pair_elements_to_instances(
+    prior: Dict[int, DocumentInstanceSpec],
+    elements: List[dict],
+    count: int,
+) -> Dict[int, dict]:
+    """Assign each SoW element to the Step 6 instance naming the same machine.
+
+    Positional zipping mislabels rows whenever Step 7 returns fewer elements
+    than Step 6 instances, or returns them in another order: the SoW name of one
+    machine lands on another. Match on the element label first, fill the rest by
+    position.
+    """
+    pairing: Dict[int, dict] = {}
+    taken: Set[int] = set()
+    leftovers: List[dict] = []
+
+    for el in elements:
+        el_label = str(el.get("label") or "").strip()
+        match: Optional[int] = None
+        if el_label:
+            for i in range(1, count + 1):
+                inst = prior.get(i)
+                inst_label = (inst.label if inst else "").strip()
+                if i in taken or not inst_label:
+                    continue
+                if labels_are_same_instance(inst_label, el_label):
+                    match = i
+                    break
+        if match is None:
+            leftovers.append(el)
+            continue
+        pairing[match] = el
+        taken.add(match)
+
+    free = [i for i in range(1, count + 1) if i not in taken]
+    for idx, el in zip(free, leftovers):
+        pairing[idx] = el
+    return pairing
+
+
 def _instances_with_names(
     dec: DocumentScopeDecision,
     elements: List[dict],
@@ -145,13 +192,13 @@ def _instances_with_names(
             )
             for i in range(1, count + 1)
         ]
-    named = elements[:count]
+    pairing = _pair_elements_to_instances(prior, elements, count)
     instances: List[DocumentInstanceSpec] = []
     for i in range(1, count + 1):
         prev = prior.get(i)
         prev_label = prev.label if prev else ""
-        if i <= len(named):
-            el = named[i - 1]
+        el = pairing.get(i)
+        if el is not None:
             instances.append(
                 DocumentInstanceSpec(
                     index=i,

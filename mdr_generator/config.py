@@ -86,6 +86,13 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
     parallel = data.get("parallel") or {}
     set_key("LLM_PARALLEL_WORKERS", parallel.get("llm_workers", 8))
 
+    scalable = data.get("scalable") or {}
+    set_key("SCALABLE_INSTANCE_VOTES", scalable.get("instance_votes", 3))
+    set_key(
+        "PAIR_CONTEXT_MAX_CHARS",
+        scalable.get("pair_context_max_chars", 40000),
+    )
+
     title_enrichment = data.get("title_enrichment") or {}
     set_key("TITLE_ENRICHMENT_ENABLED", title_enrichment.get("enabled", True))
     if "apply_suffixes" in title_enrichment:

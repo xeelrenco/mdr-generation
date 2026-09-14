@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from .config import cfg_int
 from .document_effort_profile import DocumentEffortProfile
 from .models import (
     DocumentInstanceSpec,
@@ -29,40 +31,7 @@ def _pair_key(sig: NormalizedSignal) -> Tuple[str, str]:
 
 # P-7515/B, 320-V-1001 — not GT2 / HIGH-PRESSURE (no hyphen+digits).
 _EQUIP_TAG_RE = re.compile(r"\b[A-Za-z]{1,8}-\d{2,}[A-Za-z0-9./\-]*\b")
-_INTERNAL_LABEL_RE = re.compile(
-    r"\b(section|sections|sezione|sezioni|rotor|casing|stage|stages|"
-    r"internals?|bearing|bearings|shaft|impeller)\b",
-    re.IGNORECASE,
-)
-_PLANT_TAIL_RE = re.compile(
-    r"\b(unit|units|plant|plants|project|projects|package|packages|"
-    r"facility|facilities|complex|site|sites|area|areas|"
-    r"system|systems|works|scope)\b[\s.]*$",
-    re.IGNORECASE,
-)
 _TRAILING_NUM_RE = re.compile(r"(\d+)\s*$")
-# "New steam turbine" / "la turbina" — alias of a tagged machine, not a 2nd unit.
-_GENERIC_MACHINE_ALIAS_RE = re.compile(
-    r"^(?:the\s+|a\s+|an\s+|new\s+|nuovo\s+|nuova\s+|la\s+|il\s+)?"
-    r"(?:steam\s+)?"
-    r"(?P<family>turbine|turbina(?:\s+a\s+vapore)?|compressor|compressore|"
-    r"generator|generatore|alternator|alternatore|package|skid)s?"
-    r"(?:\s+package)?\s*$",
-    re.IGNORECASE,
-)
-# Stem shared by the English and Italian spelling of each machine family.
-_MACHINE_FAMILY_STEMS = {
-    "turbine": "turbin",
-    "turbina": "turbin",
-    "compressor": "compressor",
-    "compressore": "compressor",
-    "generator": "generator",
-    "generatore": "generator",
-    "alternator": "alternator",
-    "alternatore": "alternator",
-    "package": "package",
-    "skid": "skid",
-}
 _WORD_RE = re.compile(r"[a-z]+", re.IGNORECASE)
 _STOPWORDS = frozenset(
     {
@@ -98,37 +67,6 @@ def _trailing_index(label: str) -> Optional[str]:
 
 def _content_tokens(label: str) -> Set[str]:
     return {w.lower() for w in _WORD_RE.findall(label or "")} - _STOPWORDS
-
-
-def generic_machine_alias_family(label: str) -> Optional[str]:
-    """Machine family stem for untagged 'new steam turbine' style names, else None."""
-    text = (label or "").strip()
-    if not text or _specific_tags(text) or _trailing_index(text):
-        return None
-    match = _GENERIC_MACHINE_ALIAS_RE.match(_normalize_label_text(text))
-    if not match:
-        return None
-    head = match.group("family").split()[0]
-    return _MACHINE_FAMILY_STEMS.get(head, head)
-
-
-def is_generic_machine_alias(label: str) -> bool:
-    """True for untagged 'new steam turbine' style names that alias a tagged machine."""
-    return generic_machine_alias_family(label) is not None
-
-
-def is_noise_instance_label(label: str) -> bool:
-    """True for empty, plant-level, or machine-internal labels that are not units."""
-    text = (label or "").strip()
-    if not text:
-        return True
-    if _specific_tags(text):
-        return False
-    if _INTERNAL_LABEL_RE.search(text):
-        return True
-    if _PLANT_TAIL_RE.search(text) and not re.search(r"\d", text):
-        return True
-    return False
 
 
 def labels_are_same_instance(left: str, right: str) -> bool:
@@ -169,7 +107,7 @@ def _dedupe_label_list(labels: Sequence[str]) -> List[str]:
     seen: Set[str] = set()
     for raw in labels:
         text = (raw or "").strip()
-        if not text or is_noise_instance_label(text):
+        if not text:
             continue
         key = _normalize_label_text(text)
         if key in seen:
@@ -220,37 +158,14 @@ def _cluster_by_identity(items: Sequence[str]) -> List[str]:
     return [max(groups[root], key=spec_score) for root in order]
 
 
-def cluster_instance_labels(
-    labels: Sequence[str],
-    context: str = "",
-) -> List[str]:
-    """Union identities; drop untagged 'new steam turbine' aliases of a tagged machine.
-
-    An alias is dropped only when its machine family is already named by a tagged
-    label or by the document context, so an untagged machine of another family
-    still counts as its own unit.
-    """
-    items = _dedupe_label_list(labels)
-    tagged = [lab for lab in items if _specific_tags(lab)]
-    if tagged:
-        haystack = _normalize_label_text(" ".join(tagged) + " " + (context or ""))
-        items = [
-            lab
-            for lab in items
-            if not _aliases_tagged_machine(lab, haystack)
-        ]
-    return _cluster_by_identity(items)
-
-
-def _aliases_tagged_machine(label: str, haystack: str) -> bool:
-    family = generic_machine_alias_family(label)
-    return bool(family) and family in haystack
+def cluster_instance_labels(labels: Sequence[str]) -> List[str]:
+    """Union labels that name the same unit; keep the most specific one per unit."""
+    return _cluster_by_identity(_dedupe_label_list(labels))
 
 
 def resolve_merged_instance_count(
     part_counts: Sequence[int],
     part_labels: Sequence[Sequence[str]],
-    context: str = "",
 ) -> Tuple[int, List[str], str]:
     """Union identities across split SoW parts. Never sum overlapping mentions."""
     flat: List[str] = []
@@ -259,17 +174,13 @@ def resolve_merged_instance_count(
         count = int(raw_count or 0)
         if count < 1:
             continue
-        usable = [
-            lab
-            for lab in labels
-            if str(lab or "").strip() and not is_noise_instance_label(str(lab))
-        ]
+        usable = [lab for lab in labels if str(lab or "").strip()]
         if usable:
             flat.extend(str(lab).strip() for lab in usable)
         else:
             unlabeled_counts.append(count)
 
-    clustered = cluster_instance_labels(flat, context=context)
+    clustered = cluster_instance_labels(flat)
     unlabeled_max = max(unlabeled_counts) if unlabeled_counts else 0
     if clustered:
         total = max(len(clustered), unlabeled_max)
@@ -281,18 +192,23 @@ def resolve_merged_instance_count(
         return total, clustered, mode
     if unlabeled_max:
         return unlabeled_max, [], "unlabeled_max"
-    return 1, [], "no_evidence"
+    # Every part answered "no instance here": inventing one would put in the MDR a
+    # document the model never found in the SoW.
+    return 0, [], "no_evidence"
 
 
 def dedupe_decision_instances(
     instances: Sequence[DocumentInstanceSpec],
-    context: str = "",
 ) -> List[DocumentInstanceSpec]:
-    """Collapse instances of one document that name the same machine."""
+    """Collapse instances of one document that name the same machine.
+
+    Only same-machine labels are merged: a label this module treats as noise is
+    still a deliverable of its own here, so it must not reduce the count.
+    """
     labels = [inst.label for inst in instances if (inst.label or "").strip()]
     if len(labels) < 2:
         return list(instances)
-    clustered = cluster_instance_labels(labels, context=context)
+    clustered = cluster_instance_labels(labels)
     if not clustered or len(clustered) >= len(labels):
         return list(instances)
     kept = clustered + [""] * (len(instances) - len(labels))
@@ -412,9 +328,7 @@ def _parse_scalable_instance_decisions(
             else []
         )
         if count > 1:
-            instances = dedupe_decision_instances(
-                instances, context=f"{cand.title} {chapter_name}"
-            )
+            instances = dedupe_decision_instances(instances)
             if len(instances) < count:
                 count = len(instances)
                 qa_flags.append("same_machine_instances_merged")
@@ -527,12 +441,16 @@ def _merge_partial_scalable_decisions(
         total, labels, merge_mode = resolve_merged_instance_count(
             part_counts,
             part_labels,
-            context=f"{cand.title} {chapter_name}",
         )
+        if total > 1 and is_list_like_title(cand.title, cand.title_key):
+            total = 1
+            labels = labels[:1]
+            qa_flags.append("list_no_split")
+
         if merge_mode == "no_evidence":
             qa_flags.append("scalable_partial_no_evidence")
             reason = (
-                f"Merged {split_parts} SoW parts; no quantity found, default count=1"
+                f"Merged {split_parts} SoW parts; no instance found in any part, no row"
             )
             decision_source = "rule_fallback"
         else:
@@ -562,7 +480,7 @@ def _merge_partial_scalable_decisions(
                 discipline_code=discipline_code,
                 chapter_name=chapter_name,
                 scalable=True,
-                in_scope=True,
+                in_scope=total >= 1,
                 instance_count=total,
                 instances=instances,
                 evidence_quote=quote,
@@ -585,6 +503,71 @@ def _merge_partial_scalable_decisions(
             }
         )
 
+    return decisions, audit_rows
+
+
+def voted_instance_count(counts: Sequence[int]) -> int:
+    """Modal count across votes; on a tie the median, never the outlier."""
+    values = [int(c) for c in counts]
+    if not values:
+        return 0
+    tally = Counter(values)
+    top = max(tally.values())
+    modal = sorted(count for count, hits in tally.items() if hits == top)
+    if len(modal) == 1:
+        return modal[0]
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def vote_scalable_decisions(
+    vote_runs: Sequence[Sequence[DocumentScopeDecision]],
+    candidates: Sequence[RaciCandidate],
+) -> Tuple[List[DocumentScopeDecision], List[dict]]:
+    """Pick the modal instance count per document across repeated Step 6 votes.
+
+    The counting call runs at the provider default temperature, so a single
+    answer can decompose a package into its components on one run and not on
+    the next. Voting keeps the count the model repeats, not the outlier.
+    """
+    by_key: Dict[str, List[DocumentScopeDecision]] = {}
+    for run in vote_runs:
+        for dec in run:
+            by_key.setdefault(dec.title_key, []).append(dec)
+
+    decisions: List[DocumentScopeDecision] = []
+    audit_rows: List[dict] = []
+    for cand in candidates:
+        attempts = by_key.get(cand.title_key) or []
+        if not attempts:
+            continue
+        counts = [dec.instance_count for dec in attempts]
+        winner = voted_instance_count(counts)
+        chosen = next(
+            (dec for dec in attempts if dec.instance_count == winner), attempts[0]
+        )
+        agreement = counts.count(winner)
+        if len(set(counts)) > 1:
+            chosen = replace(
+                chosen,
+                qa_flags=list(chosen.qa_flags)
+                + [f"scalable_vote_{agreement}_of_{len(counts)}"],
+                selection_reason=(
+                    f"{chosen.selection_reason}; "
+                    f"6: voto {agreement}/{len(counts)} su count={winner} "
+                    f"(voti {counts})"
+                ),
+            )
+        decisions.append(chosen)
+        audit_rows.append(
+            {
+                "title_key": cand.title_key,
+                "outcome": "voted",
+                "vote_counts": counts,
+                "voted_count": winner,
+                "vote_agreement": agreement,
+            }
+        )
     return decisions, audit_rows
 
 
@@ -688,17 +671,36 @@ def _run_scalable_pair_job(
     model: Optional[str],
 ) -> Tuple[_ScalablePairJob, List[DocumentScopeDecision], int]:
     disc, chap = job.pair
+    votes = max(1, cfg_int("SCALABLE_INSTANCE_VOTES", 3))
     try:
-        decisions, rows, llm_parts = _run_scalable_llm_for_pair(
-            disc,
-            chap,
-            job.scalable,
-            job.context_chunks,
-            job.context_meta,
-            job.source_pdf,
-            hist_map,
-            model,
-        )
+        vote_runs: List[List[DocumentScopeDecision]] = []
+        rows: List[dict] = []
+        llm_parts: List[dict] = []
+        for attempt in range(1, votes + 1):
+            decisions, attempt_rows, attempt_parts = _run_scalable_llm_for_pair(
+                disc,
+                chap,
+                job.scalable,
+                job.context_chunks,
+                job.context_meta,
+                job.source_pdf,
+                hist_map,
+                model,
+            )
+            vote_runs.append(decisions)
+            if votes > 1:
+                for part in attempt_parts:
+                    part["vote"] = attempt
+            rows = attempt_rows
+            llm_parts.extend(attempt_parts)
+
+        if votes > 1:
+            decisions, vote_rows = vote_scalable_decisions(vote_runs, job.scalable)
+            job.pair_audit["votes"] = votes
+            job.pair_audit["vote_decisions"] = vote_rows
+        else:
+            decisions = vote_runs[0]
+
         job.pair_audit["outcome"] = "ok"
         job.pair_audit["decisions"] = rows
         job.pair_audit["llm_parts"] = llm_parts

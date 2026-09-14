@@ -17,7 +17,7 @@ _LIST_TITLE_RE = re.compile(
 
 
 def is_list_like_title(title: str, title_key: str = "") -> bool:
-    """True for Equipment List / Valve List / Register / Index style RACI titles."""
+    """True for Equipment List / Register / Index style RACI titles."""
     hay = f"{title_key} {title}".strip()
     return bool(_LIST_TITLE_RE.search(hay))
 
@@ -74,18 +74,26 @@ def format_mdr_display_title(
     Col B: RACI | suffix — SoW-specific part (3d) or instance label/count (3b).
 
     disambiguate_shared=True quando lo stesso sow_specific_title è replicato su
-    più istanze: si aggiunge il suffisso istanza (label o indice) per evitare
-    che il dedupe per titolo identico elimini le righe.
+    più istanze: la riga deve distinguersi. Con una label di istanza vera si usa
+    solo quella (il titolo SoW condiviso ripetuto su N righe le fa sembrare
+    duplicate, e su N-1 nomina l'istanza sbagliata); senza label si ripiega sul
+    titolo condiviso più l'indice.
     """
     specific = (sow_specific_title or "").strip()
     if specific:
         base = (raci_title or "").strip()
-        combined = f"{base}{separator}{specific}" if base else specific
         if disambiguate_shared:
+            if _clean_instance_label(instance_label, instance_index or 0):
+                return format_mdr_title(
+                    base, instance_index, instance_label, separator=separator
+                )
             return format_mdr_title(
-                combined, instance_index, instance_label, separator=separator
+                f"{base}{separator}{specific}" if base else specific,
+                instance_index,
+                instance_label,
+                separator=separator,
             )
-        return combined
+        return f"{base}{separator}{specific}" if base else specific
     return format_mdr_title(
         raci_title, instance_index, instance_label, separator=separator
     )
