@@ -7,7 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mdr_generator.models import NormalizedSignal, PipelineSummary, RaciCandidate
-from mdr_generator.raci_vocabulary import build_title_exclusion_prompt
+from mdr_generator.raci_vocabulary import (
+    build_sow_basis_gate_prompt,
+    build_title_exclusion_prompt,
+)
 
 
 exclusions = importlib.import_module("mdr_generator.4_scope_exclusions")
@@ -177,6 +180,20 @@ class ScopeExclusionTests(unittest.TestCase):
         self.assertIn("existing Client plant system under case 2", prompt)
         self.assertNotIn("exclude_level", prompt)
         self.assertNotIn('"label"', prompt)
+
+    def test_basis_gate_prompt_treats_catalog_name_as_synonym(self):
+        prompt = build_sow_basis_gate_prompt(
+            "- technical supply specification for icss | "
+            "TECHNICAL SUPPLY SPECIFICATION FOR INTEGRATED CONTROL AND "
+            "SAFETY SYSTEMS (ICSS) | ICT | ICSS"
+        )
+        self.assertIn("catalog name", prompt)
+        self.assertIn("Do NOT require the catalog wording or acronym", prompt)
+        self.assertIn("ICSS", prompt)
+        self.assertIn("Control and Safeguarding System", prompt)
+        self.assertIn("duct-bank", prompt)
+        self.assertIn("already in scope", prompt)
+        self.assertIn("sibling of the chapter", prompt)
 
     def test_mass_drop_guard_is_fail_open(self):
         votes = {

@@ -261,12 +261,27 @@ For each candidate decide whether the SoW gives it a basis:
   this document is about — including as part of the works, the supply, the tests, the
   interfaces or the required engineering. Project-wide engineering deliverables
   (design criteria, specifications, procedures, layouts, calculations) of a system that
-  IS present in the SoW are supported.
-- "unsupported": the subject of this document does not exist in this project — the SoW
-  never introduces that system, equipment, material or work category at all.
+  IS present in the SoW are supported. The RACI title is a catalog name for that
+  subject: it does not have to appear as those words, or as that acronym, in the SoW.
+- "unsupported": this document is about a DIFFERENT system, equipment or work category
+  than the ones the SoW actually describes, even though it sits in an in-scope chapter
+  (a duct-bank drawing in a concrete chapter whose SoW works are turbine foundations).
+  Not: the same system named another way.
 
 Rules:
 - Base the decision on the whole attached SoW, not on the title wording alone.
+- The chapter is already in scope because an earlier pass found its subject in the SoW,
+  possibly in other words. A document of that chapter is supported when it is about
+  THAT subject (a spec, data sheet, I/O list, architecture or bid evaluation of the
+  same system). It is unsupported only when it is a sibling of the chapter about
+  something the SoW never introduces.
+- Do NOT require the catalog wording or acronym to appear in the SoW. Judge what the
+  words refer to. Example: the SoW says the Contractor supplies "the system for
+  supervision, control and protection" of the new machine, or "turbine control and
+  protection"; titles that say ICSS, Integrated Control and Safety System, or
+  Control and Safeguarding System are that same supply — supported. Example of a
+  true unsupported sibling: the same concrete chapter also lists duct-bank or storm-
+  water pit drawings, and the SoW never introduces those works.
 - Do NOT mark a document unsupported just because the SoW is brief about it: a single
   mention of the system, or the system being an obvious part of the described plant,
   is enough to keep it.
