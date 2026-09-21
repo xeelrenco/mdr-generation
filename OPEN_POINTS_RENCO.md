@@ -29,6 +29,7 @@ Il fallback alfabetico resta **solo** per cicli sconosciuti.
 | Colonne debug schedule | `schedule.debug_columns` in settings |
 | Ciclo List ↔ Summary   | Summary prima; List dipende da Summary. Catalogo `DocumentPredecessors` già senza arco inverso (verificato 2026-09-21). |
 | Durata documenti       | `raci_matrix.DocumentDurations.Days` da Excel `Durata più conservativa`. Non più mediana timeline. |
+| MANHOURS               | `raci_matrix.DocumentDurations.ManHours` (valore di catalogo, non più Days × 8 in pipeline). |
 
 ---
 

@@ -25,7 +25,7 @@ COL_TYPE = 10
 COL_PROG = 11  # K — progressive per coppia I+J
 COL_CATEGORY = 15
 COL_WBS = 21  # U
-COL_MANHOURS = 24  # X — ore/uomo = DocumentDurations.Days × 8
+COL_MANHOURS = 24  # X — ore/uomo da DocumentDurations.ManHours
 COL_WORKFLOW = 27  # AA
 COL_PLANNED_FIRST_ISSUE = 29  # AC — PLANNED FIRST ISSUE (AD non compilata per ora)
 # Schedule debug columns (only when schedule.debug_columns=true) — after AI (col 35)

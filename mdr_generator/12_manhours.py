@@ -1,4 +1,4 @@
-"""Step 10b: Convert catalog duration (days) to man-hours for column X."""
+"""Step 10b: Apply catalog man-hours to MDR column X."""
 
 from __future__ import annotations
 
@@ -6,23 +6,21 @@ from typing import Dict, List, Tuple
 
 from .models import MdrLineItem
 
-# Ore per giorno di durata catalogo (DocumentDurations.Days).
-HOURS_PER_DURATION_DAY = 8
-MANHOURS_SOURCE = "catalog_days"
+MANHOURS_SOURCE = "catalog"
 
 
-def apply_manhours_from_duration(
+def apply_catalog_manhours(
     line_items: List[MdrLineItem],
-    *,
-    hours_per_day: int = HOURS_PER_DURATION_DAY,
+    manhours_map: Dict[str, int],
 ) -> Tuple[int, Dict[str, int]]:
-    """MANHOURS = duration_days × hours_per_day. Empty when no catalog duration."""
+    """MANHOURS from DocumentDurations.ManHours. Empty when the catalog has no value."""
     populated = 0
     skipped = 0
 
     for item in line_items:
-        if item.duration_days is not None and item.duration_days >= 0:
-            item.manhours = int(round(item.duration_days * hours_per_day))
+        hours = manhours_map.get(item.raci_title_key)
+        if hours is not None and hours >= 0:
+            item.manhours = int(hours)
             item.manhours_source = MANHOURS_SOURCE
             populated += 1
         else:

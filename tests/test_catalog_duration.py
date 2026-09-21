@@ -15,7 +15,7 @@ catalog = importlib.import_module("mdr_generator.12_catalog_duration")
 manhours = importlib.import_module("mdr_generator.12_manhours")
 sched = importlib.import_module("mdr_generator.12_schedule")
 apply_catalog_duration = catalog.apply_catalog_duration
-apply_manhours_from_duration = manhours.apply_manhours_from_duration
+apply_catalog_manhours = manhours.apply_catalog_manhours
 
 
 def _item(title_key: str, **kwargs) -> MdrLineItem:
@@ -46,13 +46,17 @@ class CatalogDurationTests(unittest.TestCase):
         self.assertIsNone(items[1].duration_days)
         self.assertEqual(items[1].duration_source, "empty")
 
-    def test_manhours_from_catalog_days(self) -> None:
-        items = [_item("valve list", duration_days=21, duration_source="catalog")]
-        populated, breakdown = apply_manhours_from_duration(items)
+    def test_manhours_from_catalog(self) -> None:
+        items = [_item("valve list"), _item("unknown doc")]
+        populated, breakdown = apply_catalog_manhours(
+            items, {"valve list": 168, "equipment list": 224}
+        )
         self.assertEqual(populated, 1)
         self.assertEqual(items[0].manhours, 168)
-        self.assertEqual(items[0].manhours_source, "catalog_days")
-        self.assertEqual(breakdown["catalog_days"], 1)
+        self.assertEqual(items[0].manhours_source, "catalog")
+        self.assertIsNone(items[1].manhours)
+        self.assertEqual(items[1].manhours_source, "empty")
+        self.assertEqual(breakdown["catalog"], 1)
 
 
 class PredecessorDurationShiftTests(unittest.TestCase):

@@ -47,7 +47,7 @@ location = "europe-west1"
 gemini_model = "gemini-2.5-pro"
 
 [schedule]
-enabled = true  # durata da DocumentDurations.Days, MANHOURS (col. X), PLANNED FIRST ISSUE (col. AC) e ordine per predecessori. Se false: niente date; le righe si ordinano per MATCH storici
+enabled = true  # durata da DocumentDurations.Days, MANHOURS da DocumentDurations.ManHours (col. X), PLANNED FIRST ISSUE (col. AC) e ordine per predecessori. Se false: niente date; le righe si ordinano per MATCH storici
 debug_columns = false  # se true: colonne DBG_* sull'MDR (AJ+, riga 12 = project start)
 
 [parallel]

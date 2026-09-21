@@ -65,7 +65,6 @@ from mdr_generator.utils import format_elapsed_seconds, resolve_json_output_dir,
 _im = importlib.import_module
 fetch_raci_candidates = _im("mdr_generator.5_candidates").fetch_raci_candidates
 save_candidates_csv = _im("mdr_generator.5_candidates").save_candidates_csv
-HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
 normalize_signals = _im("mdr_generator.2_normalize").normalize_signals
 consolidate_normalized_signals = _im(
     "mdr_generator.2_normalize"
@@ -638,7 +637,7 @@ def main() -> int:
             )
             print(
                 f"  -> {manhours_populated}/{len(line_items)} righe con MANHOURS "
-                f"(× {HOURS_PER_DURATION_DAY} h/giorno)"
+                "(catalogo DocumentDurations.ManHours)"
             )
             print(
                 f"  -> {schedule_dated_rows} righe con PLANNED FIRST ISSUE "

@@ -433,7 +433,7 @@ def write_qa_report(
         [
             "   — MANHOURS popolati",
             summary.manhours_populated_count,
-            "Colonna X: round(Days × 8); vuoto se manca durata catalogo",
+            "Colonna X: DocumentDurations.ManHours; vuoto se manca il valore in catalogo",
         ],
         [
             "   — schedule attivo",

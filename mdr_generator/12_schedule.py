@@ -22,12 +22,11 @@ fetch_historical_prior = _im("mdr_generator.7_historical").fetch_historical_prio
 order_line_items_by_history = _im(
     "mdr_generator.7_historical"
 ).order_line_items_by_history
-load_catalog_duration_map = _im(
+load_catalog_planning_maps = _im(
     "mdr_generator.12_catalog_duration"
-).load_catalog_duration_map
+).load_catalog_planning_maps
 apply_catalog_duration = _im("mdr_generator.12_catalog_duration").apply_catalog_duration
-apply_manhours_from_duration = _im("mdr_generator.12_manhours").apply_manhours_from_duration
-HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
+apply_catalog_manhours = _im("mdr_generator.12_manhours").apply_catalog_manhours
 
 SCHEDULE_DISABLED_REASON = "schedule.enabled=false or --no-schedule"
 
@@ -248,9 +247,9 @@ def run_schedule_pass(
         )
         return line_items, audit
 
-    duration_map = load_catalog_duration_map(conn)
+    duration_map, manhours_map = load_catalog_planning_maps(conn)
     duration_populated = apply_catalog_duration(line_items, duration_map)
-    manhours_populated, mh_breakdown = apply_manhours_from_duration(line_items)
+    manhours_populated, mh_breakdown = apply_catalog_manhours(line_items, manhours_map)
 
     line_items, sched_audit = _schedule_line_items(conn, line_items, json_dir)
     hist_audit["row_order"] = "schedule"
@@ -259,8 +258,7 @@ def run_schedule_pass(
         json_dir / "manhours_audit.json",
         {
             "enabled": True,
-            "hours_per_duration_day": HOURS_PER_DURATION_DAY,
-            "formula": "manhours = round(duration_days * hours_per_duration_day)",
+            "source": "raci_matrix.DocumentDurations.ManHours",
             "duration_populated": duration_populated,
             "manhours_populated": manhours_populated,
             **mh_breakdown,

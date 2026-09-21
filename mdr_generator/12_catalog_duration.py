@@ -1,32 +1,43 @@
-"""Step 10a: Apply catalog duration days from raci_matrix.DocumentDurations."""
+"""Step 10a: Apply catalog Days and ManHours from raci_matrix.DocumentDurations."""
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import duckdb
 
 from .models import MdrLineItem
 
-CATALOG_DURATION_SQL = """
-SELECT TitleKey, Days
+CATALOG_PLANNING_SQL = """
+SELECT TitleKey, Days, ManHours
 FROM my_db.raci_matrix.DocumentDurations
 WHERE TitleKey IS NOT NULL
-  AND Days IS NOT NULL
 """
 
 DURATION_SOURCE = "catalog"
 
 
+def load_catalog_planning_maps(
+    conn: duckdb.DuckDBPyConnection,
+) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """Return (duration_days_by_title, manhours_by_title)."""
+    duration_map: Dict[str, int] = {}
+    manhours_map: Dict[str, int] = {}
+    for title_key, days, manhours in conn.execute(CATALOG_PLANNING_SQL).fetchall():
+        if not title_key:
+            continue
+        if days is not None:
+            duration_map[title_key] = int(days)
+        if manhours is not None:
+            manhours_map[title_key] = int(manhours)
+    return duration_map, manhours_map
+
+
 def load_catalog_duration_map(
     conn: duckdb.DuckDBPyConnection,
 ) -> Dict[str, int]:
-    rows = conn.execute(CATALOG_DURATION_SQL).fetchall()
-    result: Dict[str, int] = {}
-    for title_key, days in rows:
-        if title_key and days is not None:
-            result[title_key] = int(days)
-    return result
+    duration_map, _ = load_catalog_planning_maps(conn)
+    return duration_map
 
 
 def apply_catalog_duration(
