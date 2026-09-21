@@ -426,14 +426,14 @@ def write_qa_report(
         ],
         ["4. Righe MDR finali", summary.mdr_line_items or summary.selected_count, "Output Excel MDR"],
         [
-            "   — durata timeline popolata",
+            "   — durata catalogo popolata",
             summary.duration_populated_count,
-            "Giorni calendario (Finish−Start) da v_TimelineTaskToMdrLinks_Dates; usata per Step 10 schedule",
+            "Giorni da raci_matrix.DocumentDurations.Days (Excel Durata più conservativa)",
         ],
         [
             "   — MANHOURS popolati",
             summary.manhours_populated_count,
-            "Colonna X: round(giorni timeline × 8); vuoto se manca durata timeline",
+            "Colonna X: round(Days × 8); vuoto se manca durata catalogo",
         ],
         [
             "   — schedule attivo",
@@ -879,7 +879,7 @@ def write_qa_report(
             "TitleKey",
             "Istanze",
             "Scalable",
-            "Giorni (timeline)",
+            "Giorni (catalogo)",
             "MANHOURS",
             "Planned First Issue",
             "Occorrenze storico",

@@ -1,4 +1,4 @@
-"""Step 10: Schedule planning — timeline duration, man-hours, dates, row order."""
+"""Step 10: Schedule planning — catalog duration, man-hours, dates, row order."""
 
 from __future__ import annotations
 
@@ -22,10 +22,10 @@ fetch_historical_prior = _im("mdr_generator.7_historical").fetch_historical_prio
 order_line_items_by_history = _im(
     "mdr_generator.7_historical"
 ).order_line_items_by_history
-load_timeline_duration_map = _im(
-    "mdr_generator.12_timeline_duration"
-).load_timeline_duration_map
-apply_timeline_duration = _im("mdr_generator.12_timeline_duration").apply_timeline_duration
+load_catalog_duration_map = _im(
+    "mdr_generator.12_catalog_duration"
+).load_catalog_duration_map
+apply_catalog_duration = _im("mdr_generator.12_catalog_duration").apply_catalog_duration
 apply_manhours_from_duration = _im("mdr_generator.12_manhours").apply_manhours_from_duration
 HOURS_PER_DURATION_DAY = _im("mdr_generator.12_manhours").HOURS_PER_DURATION_DAY
 
@@ -248,8 +248,8 @@ def run_schedule_pass(
         )
         return line_items, audit
 
-    duration_map = load_timeline_duration_map(conn)
-    duration_populated = apply_timeline_duration(line_items, duration_map)
+    duration_map = load_catalog_duration_map(conn)
+    duration_populated = apply_catalog_duration(line_items, duration_map)
     manhours_populated, mh_breakdown = apply_manhours_from_duration(line_items)
 
     line_items, sched_audit = _schedule_line_items(conn, line_items, json_dir)

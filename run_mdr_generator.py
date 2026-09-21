@@ -634,7 +634,7 @@ def main() -> int:
         )
         if schedule_enabled:
             print(
-                f"  -> {duration_populated}/{len(line_items)} righe con durata timeline (giorni)"
+                f"  -> {duration_populated}/{len(line_items)} righe con durata catalogo (giorni)"
             )
             print(
                 f"  -> {manhours_populated}/{len(line_items)} righe con MANHOURS "
