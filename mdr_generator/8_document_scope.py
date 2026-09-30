@@ -6,7 +6,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from .config import cfg_int
 from .document_effort_profile import DocumentEffortProfile
@@ -19,7 +19,7 @@ from .models import (
 )
 from .pair_scope_context import build_pair_sow_context_chunks
 from .parallel_workers import llm_parallel_workers, run_parallel
-from .raci_vocabulary import build_scalable_instance_prompt
+from .raci_vocabulary import build_instance_merge_prompt, build_scalable_instance_prompt
 from .scope_pdf import call_scope_llm_text, read_scope_pdf_bytes, unique_pdf_labels
 from .mdr_title import is_list_like_title
 from .utils import save_json
@@ -400,6 +400,71 @@ def _parse_scalable_instance_decisions(
     return decisions, audit_rows
 
 
+LabelMerger = Callable[[List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]]
+
+
+def _merge_label_items(
+    part_counts: Sequence[int],
+    part_labels: Sequence[Sequence[str]],
+    part_quotes: Sequence[str],
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Distinct labels from quantified parts, with the part quote; plus unlabeled max."""
+    items: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    unlabeled_max = 0
+    for part_no, (raw_count, labels) in enumerate(zip(part_counts, part_labels), start=1):
+        count = int(raw_count or 0)
+        if count < 1:
+            continue
+        usable = [str(lab).strip() for lab in labels if str(lab or "").strip()]
+        if not usable:
+            unlabeled_max = max(unlabeled_max, count)
+            continue
+        quote = part_quotes[part_no - 1] if part_no <= len(part_quotes) else ""
+        for label in usable:
+            key = _normalize_label_text(label)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                {
+                    "id": f"L{len(items) + 1}",
+                    "part": part_no,
+                    "label": label,
+                    "quote": (quote or "")[:250],
+                }
+            )
+    return items, unlabeled_max
+
+
+def _labels_from_merge_groups(
+    items: Sequence[Dict[str, Any]],
+    groups: Sequence[Dict[str, Any]],
+) -> List[str]:
+    """One label per LLM group; ids the model left out are clustered by the code rule."""
+    by_id = {item["id"]: item["label"] for item in items}
+    assigned: Set[str] = set()
+    labels: List[str] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        ids = [
+            str(i).strip()
+            for i in (group.get("ids") or [])
+            if str(i).strip() in by_id and str(i).strip() not in assigned
+        ]
+        if not ids:
+            continue
+        assigned.update(ids)
+        members = [by_id[i] for i in ids]
+        label = str(group.get("label") or "").strip() or max(
+            members, key=lambda lab: (1 if _specific_tags(lab) else 0, len(lab))
+        )
+        labels.append(label)
+    leftover = [item["label"] for item in items if item["id"] not in assigned]
+    return labels + cluster_instance_labels(leftover)
+
+
 def _merge_partial_scalable_decisions(
     partial_lists: List[List[DocumentScopeDecision]],
     candidates: List[RaciCandidate],
@@ -407,6 +472,7 @@ def _merge_partial_scalable_decisions(
     chapter_name: str,
     source_pdf: str,
     split_parts: int,
+    label_merger: Optional[LabelMerger] = None,
 ) -> Tuple[List[DocumentScopeDecision], List[dict]]:
     merged: Dict[str, dict] = {}
     audit_rows: List[dict] = []
@@ -418,6 +484,7 @@ def _merge_partial_scalable_decisions(
                 {
                     "part_counts": [],
                     "part_labels": [],
+                    "part_quotes": [],
                     "quotes": [],
                     "pages": set(),
                 },
@@ -426,9 +493,35 @@ def _merge_partial_scalable_decisions(
             bucket["part_labels"].append(
                 [inst.label for inst in dec.instances if inst.label]
             )
+            bucket["part_quotes"].append(dec.evidence_quote or "")
             if dec.evidence_quote:
                 bucket["quotes"].append(dec.evidence_quote)
             bucket["pages"].update(dec.source_pages)
+
+    merge_inputs: Dict[str, Tuple[List[Dict[str, Any]], int]] = {}
+    for cand in candidates:
+        data = merged.get(cand.title_key)
+        if not data:
+            continue
+        items, unlabeled_max = _merge_label_items(
+            data["part_counts"], data["part_labels"], data["part_quotes"]
+        )
+        if len(items) >= 2:
+            merge_inputs[cand.title_key] = (items, unlabeled_max)
+
+    llm_groups: Dict[str, List[Dict[str, Any]]] = {}
+    llm_merge_error = ""
+    if label_merger and merge_inputs:
+        titles = {c.title_key: c.title for c in candidates}
+        try:
+            llm_groups = label_merger(
+                [
+                    {"title_key": key, "title": titles[key], "labels": items}
+                    for key, (items, _) in merge_inputs.items()
+                ]
+            )
+        except Exception as ex:
+            llm_merge_error = str(ex)
 
     decisions: List[DocumentScopeDecision] = []
     split_flag = f"sow_context_split_{split_parts}_parts"
@@ -438,10 +531,27 @@ def _merge_partial_scalable_decisions(
         qa_flags = [split_flag]
         part_counts = data["part_counts"] if data else []
         part_labels = data["part_labels"] if data else []
-        total, labels, merge_mode = resolve_merged_instance_count(
-            part_counts,
-            part_labels,
-        )
+        merge_audit: dict = {}
+        groups = llm_groups.get(cand.title_key)
+        if cand.title_key in merge_inputs and groups:
+            items, unlabeled_max = merge_inputs[cand.title_key]
+            labels = _labels_from_merge_groups(items, groups)
+            total = max(len(labels), unlabeled_max)
+            merge_mode = (
+                "llm_merge_with_unlabeled_max"
+                if unlabeled_max > len(labels)
+                else "llm_merge"
+            )
+            merge_audit = {"llm_merge_labels": items, "llm_merge_groups": groups}
+        else:
+            total, labels, merge_mode = resolve_merged_instance_count(
+                part_counts,
+                part_labels,
+            )
+            if cand.title_key in merge_inputs and label_merger:
+                merge_audit = {
+                    "llm_merge_fallback": llm_merge_error or "no groups returned"
+                }
         if total > 1 and is_list_like_title(cand.title, cand.title_key):
             total = 1
             labels = labels[:1]
@@ -500,6 +610,7 @@ def _merge_partial_scalable_decisions(
                 "part_counts": part_counts,
                 "clustered_labels": labels,
                 "parts": split_parts,
+                **merge_audit,
             }
         )
 
@@ -644,6 +755,19 @@ def _run_scalable_llm_for_pair(
             }
         )
 
+    def _llm_label_merger(
+        documents: List[Dict[str, Any]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        prompt = build_instance_merge_prompt(disc, chap, documents)
+        data = call_scope_llm_text(
+            prompt, model=model, pass_id="pass1", stage="pass9_scalable"
+        )
+        return {
+            str(item.get("title_key") or "").strip().lower(): list(item.get("groups") or [])
+            for item in data.get("documents") or []
+            if isinstance(item, dict)
+        }
+
     decisions, rows = _merge_partial_scalable_decisions(
         partial_lists,
         scalable,
@@ -651,6 +775,7 @@ def _run_scalable_llm_for_pair(
         chap,
         source_pdf,
         split_parts=part_total,
+        label_merger=_llm_label_merger,
     )
     return decisions, rows, llm_parts_audit
 

@@ -268,6 +268,123 @@ class ParseAndMergeTests(unittest.TestCase):
         self.assertNotIn("sum", decisions[0].selection_reason.lower())
 
 
+class LlmLabelMergeTests(unittest.TestCase):
+    def _compressor_parts(self, cand: RaciCandidate) -> list:
+        return [
+            [_dec(cand, 1, ["210-MA-E-30107"])],
+            [_dec(cand, 1, ["EC5"])],
+            [_dec(cand, 0, [])],
+            [_dec(cand, 1, ["Integrated electric centrifugal compressor"])],
+        ]
+
+    def test_llm_groups_aliases_without_shared_tag(self) -> None:
+        """Tag, codice modello e descrizione della stessa macchina: il codice
+        non li unisce, il modello si'."""
+        cand = _cand("TECHNICAL DATA SHEETS FOR CENTRIFUGAL COMPRESSOR")
+        seen: list = []
+
+        def merger(documents):
+            seen.extend(documents)
+            return {
+                cand.title_key: [
+                    {"ids": ["L1", "L2", "L3"], "label": "210-MA-E-30107"}
+                ]
+            }
+
+        decisions, rows = _merge_partial_scalable_decisions(
+            self._compressor_parts(cand),
+            [cand],
+            "MAC",
+            "CENTRIFUGAL COMPRESSOR",
+            "sow.pdf",
+            split_parts=4,
+            label_merger=merger,
+        )
+        self.assertEqual([i["label"] for i in seen[0]["labels"]], [
+            "210-MA-E-30107",
+            "EC5",
+            "Integrated electric centrifugal compressor",
+        ])
+        self.assertEqual(decisions[0].instance_count, 1)
+        self.assertEqual(decisions[0].instances[0].label, "210-MA-E-30107")
+        self.assertEqual(rows[0]["merge_mode"], "llm_merge")
+
+    def test_llm_keeps_distinct_units_apart(self) -> None:
+        cand = _cand("TECHNICAL DATA SHEETS FOR TRANSFORMERS")
+        parts = [
+            [_dec(cand, 1, ["TML-5A VFD transformer"])],
+            [_dec(cand, 1, ["TML-5B VFD transformer"])],
+        ]
+        decisions, _ = _merge_partial_scalable_decisions(
+            parts,
+            [cand],
+            "ELE",
+            "TRANSFORMERS",
+            "sow.pdf",
+            split_parts=2,
+            label_merger=lambda docs: {
+                cand.title_key: [
+                    {"ids": ["L1"], "label": "TML-5A"},
+                    {"ids": ["L2"], "label": "TML-5B"},
+                ]
+            },
+        )
+        self.assertEqual(decisions[0].instance_count, 2)
+
+    def test_ids_left_out_by_the_model_are_not_lost(self) -> None:
+        cand = _cand("TECHNICAL DATA SHEETS FOR TRANSFORMERS")
+        parts = [
+            [_dec(cand, 1, ["TML-5A"])],
+            [_dec(cand, 1, ["TML-5B"])],
+        ]
+        decisions, _ = _merge_partial_scalable_decisions(
+            parts,
+            [cand],
+            "ELE",
+            "TRANSFORMERS",
+            "sow.pdf",
+            split_parts=2,
+            label_merger=lambda docs: {cand.title_key: [{"ids": ["L1"]}]},
+        )
+        self.assertEqual(decisions[0].instance_count, 2)
+
+    def test_merge_error_falls_back_to_code_union(self) -> None:
+        cand = _cand("TECHNICAL DATA SHEETS FOR CENTRIFUGAL COMPRESSOR")
+
+        def broken(_documents):
+            raise RuntimeError("timeout")
+
+        decisions, rows = _merge_partial_scalable_decisions(
+            self._compressor_parts(cand),
+            [cand],
+            "MAC",
+            "CENTRIFUGAL COMPRESSOR",
+            "sow.pdf",
+            split_parts=4,
+            label_merger=broken,
+        )
+        self.assertEqual(rows[0]["merge_mode"], "label_union")
+        self.assertEqual(rows[0]["llm_merge_fallback"], "timeout")
+        self.assertEqual(decisions[0].instance_count, 3)
+
+    def test_single_label_does_not_call_the_model(self) -> None:
+        cand = _cand()
+
+        def merger(_documents):
+            raise AssertionError("merge call not needed")
+
+        decisions, _ = _merge_partial_scalable_decisions(
+            [[_dec(cand, 1, ["P-7515/B"])], [_dec(cand, 1, ["p-7515/b"])]],
+            [cand],
+            "MAC",
+            "STEAM TURBINES",
+            "sow.pdf",
+            split_parts=2,
+            label_merger=merger,
+        )
+        self.assertEqual(decisions[0].instance_count, 1)
+
+
 class PromptTests(unittest.TestCase):
     def test_multipart_prompt_says_union_not_sum(self) -> None:
         prompt = build_scalable_instance_prompt(

@@ -729,6 +729,55 @@ Respond with JSON only:
 """
 
 
+def build_instance_merge_prompt(
+    discipline_code: str,
+    chapter_name: str,
+    documents: List[Dict[str, Any]],
+) -> str:
+    """Prompt for step 6 merge: group labels from split SoW parts by physical unit.
+
+    Each document: {title_key, title, labels: [{id, part, label, quote}]}.
+    """
+    blocks: List[str] = []
+    for doc in documents:
+        rows = [
+            f'  {item["id"]} (part {item["part"]}): "{item["label"]}"'
+            + (f' — SoW: "{item["quote"]}"' if item.get("quote") else "")
+            for item in doc["labels"]
+        ]
+        blocks.append(f"- {doc['title_key']} | {doc['title']}\n" + "\n".join(rows))
+    docs_block = "\n".join(blocks)
+
+    return f"""You merge instance labels for an EPC/engineering Master Document Register.
+
+The Scope of Work for the RACI pair {discipline_code} | {chapter_name} was too long for one
+reading, so it was read in separate parts. Each part named the units it found for each
+document below, with the SoW text it relied on. The same unit is often named differently
+in different parts: by its equipment tag in one, by a vendor model or type code in another,
+by a plain description in a third.
+
+DOCUMENTS AND LABELS (id (part): "label" — SoW evidence):
+{docs_block}
+
+For EACH document, group its label ids so that each group is ONE physical deliverable unit.
+- Put labels in the same group when the evidence shows they name the same unit: a tag, a
+  model code and a description of the same machine are one unit (e.g. "210-MA-E-30107",
+  "EC5" and "Integrated electric centrifugal compressor" when the SoW describes one
+  compressor supplied as EC5 under that specification).
+- Keep labels in separate groups when they name distinct units: different tags or different
+  numbers ("TML-5A" and "TML-5B", "Unit 1" and "Unit 2") are different units, even when
+  the rest of the name is identical.
+- A generic name ("the compressor", "the package") joins the unit it refers to; do not
+  make it a unit of its own when the document has only one unit of that kind.
+- Judge from the labels and the evidence only; do not invent units.
+- Every id appears in exactly one group.
+- label: the most specific name of the group (prefer the equipment tag), in English.
+
+Respond with JSON only:
+{{"documents": [{{"title_key": "...", "groups": [{{"ids": ["L1", "L3"], "label": "..."}}]}}]}}
+"""
+
+
 def build_document_scope_prompt(
     discipline_code: str,
     chapter_name: str,

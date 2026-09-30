@@ -28,9 +28,9 @@ Il fallback alfabetico resta **solo** per cicli sconosciuti.
 | Lingua suffissi titoli | Inglese (prompt 3b/3d)             |
 | Colonne debug schedule | `schedule.debug_columns` in settings |
 | Ciclo List ↔ Summary   | Summary prima; List dipende da Summary. Catalogo `DocumentPredecessors` già senza arco inverso (verificato 2026-09-21). |
-| Durata documenti       | `raci_matrix.DocumentDurations.Days` da Excel `Durata più conservativa`. Non più mediana timeline. |
-| MANHOURS               | `raci_matrix.DocumentDurations.ManHours` (valore di catalogo, non più Days × 8 in pipeline). |
+| Durata documenti       | Catalogo unico in `C:\Progetti_IA\Renco\kickoff\Durata documenti`. `Days` da Excel `Durata (giorni)` (`documenti_durate_modificato_v6_Ore.xlsx`). Non più mediana timeline. |
+| MANHOURS               | `raci_matrix.DocumentDurations.ManHours` da Excel `Ore Uomo (Proposte)` (valore di catalogo, non Days × 8). |
 
 ---
 
-*Ultimo aggiornamento: 2026-09-21*
+*Ultimo aggiornamento: 2026-09-29*

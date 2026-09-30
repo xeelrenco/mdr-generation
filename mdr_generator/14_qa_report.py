@@ -428,7 +428,7 @@ def write_qa_report(
         [
             "   — durata catalogo popolata",
             summary.duration_populated_count,
-            "Giorni da raci_matrix.DocumentDurations.Days (Excel Durata più conservativa)",
+            "Giorni da raci_matrix.DocumentDurations.Days (Excel Durata (giorni))",
         ],
         [
             "   — MANHOURS popolati",
