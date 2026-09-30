@@ -90,7 +90,7 @@ def _flatten_settings(data: Dict[str, Any]) -> Dict[str, str]:
     set_key("SCALABLE_INSTANCE_VOTES", scalable.get("instance_votes", 3))
     set_key(
         "PAIR_CONTEXT_MAX_CHARS",
-        scalable.get("pair_context_max_chars", 40000),
+        scalable.get("pair_context_max_chars", 400000),
     )
 
     voting = data.get("voting") or {}

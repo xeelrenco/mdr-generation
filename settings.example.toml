@@ -115,3 +115,11 @@ llm_model = ""  # vuoto = usa scope.pass1.llm_model
 # 1 = nessun voto (comportamento storico).
 # arbiter_votes = 3
 # title_exclusion_votes = 3
+
+# [scalable]
+# Step 6: un SoW di coppia oltre il tetto viene letto a pezzi e le istanze dei
+# pezzi vengono ricucite da una chiamata LLM. Letto intero il modello riconosce
+# da solo gli alias della stessa macchina (8540: coppie fino a ~100k caratteri,
+# ~25k token): il tetto resta sopra le dimensioni reali, lo split e' l'eccezione.
+# instance_votes = 3
+# pair_context_max_chars = 400000

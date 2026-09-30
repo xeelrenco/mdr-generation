@@ -13,7 +13,7 @@ from .scope_pdf import extract_pdf_pages_text
 # its own excerpt, so one machine named by tag in one part and by description in
 # another is counted twice. Keep the budget above the largest pair so the model
 # decides the quantity on the whole evidence.
-DEFAULT_PAIR_CONTEXT_MAX_CHARS = 40000
+DEFAULT_PAIR_CONTEXT_MAX_CHARS = 400000
 
 
 @dataclass
